@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <!-- Background -->
+  <rect width="512" height="512" fill="#0A0A0A"/>
+
+  <!-- Hard shadow -->
+  <rect x="108" y="108" width="296" height="296" fill="#C8FF00"/>
+
+  <!-- Inner black square -->
+  <rect x="96" y="96" width="296" height="296" fill="#0A0A0A" stroke="#C8FF00" stroke-width="8"/>
+
+  <!-- Letter S -->
+  <text
+    x="244"
+    y="298"
+    font-family="Arial Black, Arial, sans-serif"
+    font-weight="900"
+    font-size="220"
+    fill="#C8FF00"
+    text-anchor="middle"
+    dominant-baseline="auto"
+  >S</text>
+</svg>
