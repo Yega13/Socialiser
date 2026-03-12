@@ -12,7 +12,8 @@
       "Bash(cd \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\" && npm uninstall @cloudflare/next-on-pages --legacy-peer-deps && npm install -D @opennextjs/cloudflare --legacy-peer-deps 2>&1)",
       "Bash(cd \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\" && npx opennextjs-cloudflare build 2>&1)",
       "Bash(cd \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\" && echo y | npx opennextjs-cloudflare build 2>&1)",
-      "Bash(cd \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\" && set NEXT_DISABLE_TURBOPACK=1 && npx opennextjs-cloudflare build 2>&1)"
+      "Bash(cd \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\" && set NEXT_DISABLE_TURBOPACK=1 && npx opennextjs-cloudflare build 2>&1)",
+      "Bash(del \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\\\\src\\\\proxy.ts\")"
     ]
   }
 }

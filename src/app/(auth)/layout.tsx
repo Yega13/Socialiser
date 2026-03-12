@@ -1,12 +1,17 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
+import { createClient } from "@/lib/supabase/server";
 import { SITE_CONFIG } from "@/lib/constants";
 
 export const metadata: Metadata = {
   robots: { index: false },
 };
 
-export default function AuthLayout({ children }: { children: React.ReactNode }) {
+export default async function AuthLayout({ children }: { children: React.ReactNode }) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (user) redirect("/dashboard");
   return (
     <div className="min-h-screen bg-[#0A0A0A] flex flex-col">
       <header className="p-4 sm:p-6">
