@@ -4,10 +4,11 @@ import { createClient } from "@/lib/supabase/server";
 export const runtime = "edge";
 
 export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const code = searchParams.get("code");
-  const error = searchParams.get("error");
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL!;
+  const reqUrl = new URL(request.url);
+  const baseUrl = reqUrl.origin;
+  const code = reqUrl.searchParams.get("code");
+  const error = reqUrl.searchParams.get("error");
+  const appUrl = baseUrl;
 
   if (error || !code) {
     return NextResponse.redirect(`${appUrl}/dashboard?error=youtube_auth_failed`);
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
       code,
       client_id: process.env.GOOGLE_CLIENT_ID!,
       client_secret: process.env.GOOGLE_CLIENT_SECRET!,
-      redirect_uri: `${appUrl}/api/auth/callback/youtube`,
+      redirect_uri: `${baseUrl}/api/auth/callback/youtube`,
       grant_type: "authorization_code",
     }),
   });
