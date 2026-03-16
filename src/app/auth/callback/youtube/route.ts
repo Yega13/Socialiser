@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
         code,
         client_id: process.env.GOOGLE_CLIENT_ID ?? "",
         client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-        redirect_uri: `${baseUrl}/api/auth/callback/youtube`,
+        redirect_uri: `${baseUrl}/auth/callback/youtube`,
         grant_type: "authorization_code",
       }),
     });
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
       channelTitle = channelData.items?.[0]?.snippet?.title ?? null;
     } catch {}
 
-    // Save to Supabase via REST API — no SDK needed, avoids module-level crashes
+    // Save to Supabase via REST API — no SDK needed
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
     const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 
