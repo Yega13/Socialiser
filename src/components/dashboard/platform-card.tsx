@@ -47,7 +47,7 @@ export function PlatformCard({
 
       const params = new URLSearchParams({
         client_id: "695113371811-i61qt8hbhs9gn3rd4b6ga99114tcimek.apps.googleusercontent.com",
-        redirect_uri: `${window.location.origin}/connect/youtube`,
+        redirect_uri: `${window.location.origin}/auth/callback`,
         response_type: "code",
         scope: [
           "https://www.googleapis.com/auth/youtube.upload",
