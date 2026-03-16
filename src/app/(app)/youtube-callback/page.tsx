@@ -2,6 +2,7 @@
 
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
+import { createClient } from "@/lib/supabase/client";
 import { exchangeYouTubeCode } from "./actions";
 
 function YouTubeCallbackInner() {
@@ -22,13 +23,41 @@ function YouTubeCallbackInner() {
       }
 
       try {
+        // Step 1: Exchange code for tokens via Server Action (keeps client_secret server-side)
         setStatus("Exchanging token...");
         const redirectUri = `${window.location.origin}/youtube-callback`;
-        const result = await exchangeYouTubeCode(code, redirectUri, userId);
+        const result = await exchangeYouTubeCode(code, redirectUri);
 
         if (!result.success) {
           setStatus(`Error: ${result.error}`);
           setTimeout(() => router.push("/dashboard?error=youtube_failed"), 3000);
+          return;
+        }
+
+        // Step 2: Save to Supabase using the browser client (already authenticated)
+        setStatus("Saving connection...");
+        const supabase = createClient();
+
+        const { error: dbError } = await supabase
+          .from("connected_platforms")
+          .upsert(
+            {
+              user_id: userId,
+              platform: "youtube",
+              platform_username: result.channel_title,
+              access_token: result.access_token,
+              refresh_token: result.refresh_token ?? null,
+              token_expires_at: result.expires_in
+                ? new Date(Date.now() + result.expires_in * 1000).toISOString()
+                : null,
+              is_active: true,
+            },
+            { onConflict: "user_id,platform" }
+          );
+
+        if (dbError) {
+          setStatus(`Database error: ${dbError.message}`);
+          setTimeout(() => router.push("/dashboard?error=db_error"), 3000);
           return;
         }
 
