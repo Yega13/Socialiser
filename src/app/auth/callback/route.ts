@@ -96,12 +96,15 @@ async function handleYouTubeCallback(request: NextRequest) {
 }
 
 export async function GET(request: NextRequest) {
+  try {
   const url = new URL(request.url);
 
   // YouTube callback — Google sends `state` param with user ID
+  // Also check for `scope` to distinguish from Supabase callbacks that may also have state
   const state = url.searchParams.get("state");
-  if (state) {
-    return handleYouTubeCallback(request);
+  const scope = url.searchParams.get("scope");
+  if (state && scope && scope.includes("youtube")) {
+    return await handleYouTubeCallback(request);
   }
 
   // Supabase OAuth callback (Google login, etc.)
@@ -148,4 +151,12 @@ export async function GET(request: NextRequest) {
   }
 
   return NextResponse.redirect(`${url.origin}/login?error=no_code`);
+  } catch (e) {
+    // Last resort — return plain text error so we can see what's crashing
+    const msg = e instanceof Error ? `${e.message}\n${e.stack}` : String(e);
+    return new Response(`CALLBACK ERROR:\n${msg}\n\nURL: ${request.url}`, {
+      status: 200,
+      headers: { "content-type": "text/plain" },
+    });
+  }
 }
