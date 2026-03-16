@@ -18,7 +18,8 @@
       "Bash(grep -r \"pages_build_output_dir\\\\|outputDirectory\\\\|output_dir\" \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\\\\node_modules\\\\@opennextjs\\\\cloudflare\\\\dist\" --include=\"*.js\" -l 2>/dev/null | head -5)",
       "Bash(cd \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\" && find . -maxdepth 2 -type d | grep -E '^./[^/.]+/?$' | sort)",
       "Bash(cd \"C:\\\\Users\\\\yegan\\\\OneDrive\\\\Desktop\\\\Socialiser\" && rm -rf .next && npm run build 2>&1)",
-      "Bash(cat > /dev/null << 'STRUCTURE'\nThis is just showing the structure. Not writing any files.\nSTRUCTURE\n\necho \"Directory structure compiled from source inspection\")"
+      "Bash(cat > /dev/null << 'STRUCTURE'\nThis is just showing the structure. Not writing any files.\nSTRUCTURE\n\necho \"Directory structure compiled from source inspection\")",
+      "Bash(cd:*)"
     ]
   }
 }

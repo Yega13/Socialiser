@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "edge";
 
@@ -8,8 +8,9 @@ export async function GET(request: NextRequest) {
   const baseUrl = reqUrl.origin;
   const code = reqUrl.searchParams.get("code");
   const error = reqUrl.searchParams.get("error");
+  const userId = reqUrl.searchParams.get("state");
 
-  if (error || !code) {
+  if (error || !code || !userId) {
     return NextResponse.redirect(`${baseUrl}/dashboard?error=youtube_auth_failed`);
   }
 
@@ -30,7 +31,7 @@ export async function GET(request: NextRequest) {
     const tokens = await tokenRes.json();
 
     if (!tokens.access_token) {
-      return NextResponse.redirect(`${baseUrl}/dashboard?error=no_token&details=${encodeURIComponent(JSON.stringify(tokens))}`);
+      return NextResponse.redirect(`${baseUrl}/dashboard?error=no_token`);
     }
 
     // Get YouTube channel info
@@ -44,21 +45,19 @@ export async function GET(request: NextRequest) {
       channelTitle = channelData.items?.[0]?.snippet?.title ?? null;
     } catch {}
 
-    // Save to Supabase
-    const supabase = await createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (!user) {
-      return NextResponse.redirect(`${baseUrl}/login`);
-    }
+    // Save using service role key — no cookies needed
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+      process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""
+    );
 
     const expiresAt = tokens.expires_in
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : null;
 
-    const { error: dbError } = await supabase.from("connected_platforms").upsert(
+    await supabase.from("connected_platforms").upsert(
       {
-        user_id: user.id,
+        user_id: userId,
         platform: "youtube",
         platform_username: channelTitle,
         access_token: tokens.access_token,
@@ -69,13 +68,11 @@ export async function GET(request: NextRequest) {
       { onConflict: "user_id,platform" }
     );
 
-    if (dbError) {
-      return NextResponse.redirect(`${baseUrl}/dashboard?error=db_error&details=${encodeURIComponent(dbError.message)}`);
-    }
-
     return NextResponse.redirect(`${baseUrl}/dashboard?connected=youtube`);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.redirect(`${baseUrl}/dashboard?error=crash&details=${encodeURIComponent(msg)}`);
+    return NextResponse.redirect(
+      `${baseUrl}/dashboard?error=crash&details=${encodeURIComponent(msg)}`
+    );
   }
 }

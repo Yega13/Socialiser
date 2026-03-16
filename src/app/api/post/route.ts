@@ -1,14 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "edge";
 
-async function refreshToken(refreshToken: string): Promise<string | null> {
+async function refreshYouTubeToken(rt: string): Promise<string | null> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({
-      refresh_token: refreshToken,
+      refresh_token: rt,
       client_id: process.env.GOOGLE_CLIENT_ID!,
       client_secret: process.env.GOOGLE_CLIENT_SECRET!,
       grant_type: "refresh_token",
@@ -61,10 +61,16 @@ async function postToYouTube(
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
+  // Verify user via JWT — avoids importing next/headers which crashes on CF Workers
+  const authHeader = request.headers.get("authorization");
+  const token = authHeader?.replace("Bearer ", "");
+
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  const { data: { user } } = await supabase.auth.getUser(token);
 
   if (!user) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -102,7 +108,7 @@ export async function POST(request: NextRequest) {
       new Date(conn.token_expires_at) <= new Date() &&
       conn.refresh_token
     ) {
-      const newToken = await refreshToken(conn.refresh_token);
+      const newToken = await refreshYouTubeToken(conn.refresh_token);
       if (newToken) {
         accessToken = newToken;
         await supabase

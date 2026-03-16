@@ -39,13 +39,20 @@ export default function ComposePage() {
     if (!title.trim() || selected.length === 0) return;
     setIsPosting(true);
 
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
+
     const formData = new FormData();
     formData.append("title", title);
     formData.append("description", description);
     formData.append("platforms", JSON.stringify(selected));
     if (video) formData.append("video", video);
 
-    const res = await fetch("/api/post", { method: "POST", body: formData });
+    const res = await fetch("/api/post", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session?.access_token ?? ""}` },
+      body: formData,
+    });
     const data = await res.json();
     setResults(data.results);
     setIsPosting(false);

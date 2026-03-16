@@ -23,17 +23,28 @@ export function PlatformCard({
 
   async function handleDisconnect() {
     setIsLoading(true);
+    const { createClient } = await import("@/lib/supabase/client");
+    const supabase = createClient();
+    const { data: { session } } = await supabase.auth.getSession();
     await fetch("/api/platforms/disconnect", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${session?.access_token ?? ""}`,
+      },
       body: JSON.stringify({ platform: platform.id }),
     });
     router.refresh();
     setIsLoading(false);
   }
 
-  function handleConnect() {
+  async function handleConnect() {
     if (platform.id === "youtube") {
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { window.location.href = "/login"; return; }
+
       const params = new URLSearchParams({
         client_id: "695113371811-i61qt8hbhs9gn3rd4b6ga99114tcimek.apps.googleusercontent.com",
         redirect_uri: `${window.location.origin}/api/auth/callback/youtube`,
@@ -45,6 +56,7 @@ export function PlatformCard({
         ].join(" "),
         access_type: "offline",
         prompt: "consent",
+        state: user.id,
       });
       window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
     } else {
