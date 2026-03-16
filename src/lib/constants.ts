@@ -8,6 +8,14 @@ export const SITE_CONFIG = {
 
 export const PLATFORMS = [
   {
+    id: "youtube",
+    name: "YouTube",
+    description: "Upload videos",
+    icon: "▶",
+    color: "#FF0000",
+    comingSoon: false,
+  },
+  {
     id: "twitter",
     name: "X / Twitter",
     description: "Post threads & updates",
@@ -37,14 +45,6 @@ export const PLATFORMS = [
     description: "Join the conversation",
     icon: "@",
     color: "#000000",
-    comingSoon: true,
-  },
-  {
-    id: "bluesky",
-    name: "Bluesky",
-    description: "Decentralized social",
-    icon: "🦋",
-    color: "#0085FF",
     comingSoon: true,
   },
   {

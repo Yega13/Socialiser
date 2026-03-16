@@ -1,14 +1,41 @@
+"use client";
+
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import type { Platform } from "@/lib/constants";
+import { useState } from "react";
+import { useRouter } from "next/navigation";
 
 interface PlatformCardProps {
   platform: Platform;
   connected?: boolean;
+  platformUsername?: string | null;
 }
 
-export function PlatformCard({ platform, connected = false }: PlatformCardProps) {
+export function PlatformCard({
+  platform,
+  connected = false,
+  platformUsername,
+}: PlatformCardProps) {
+  const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
+
+  async function handleDisconnect() {
+    setIsLoading(true);
+    await fetch("/api/platforms/disconnect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ platform: platform.id }),
+    });
+    router.refresh();
+    setIsLoading(false);
+  }
+
+  function handleConnect() {
+    window.location.href = `/api/auth/${platform.id}`;
+  }
+
   return (
     <div
       className={cn(
@@ -27,7 +54,9 @@ export function PlatformCard({ platform, connected = false }: PlatformCardProps)
           </div>
           <div>
             <div className="font-bold text-sm text-[#0A0A0A]">{platform.name}</div>
-            <div className="text-xs text-[#5C5C5A]">{platform.description}</div>
+            <div className="text-xs text-[#5C5C5A]">
+              {platformUsername ?? platform.description}
+            </div>
           </div>
         </div>
         {platform.comingSoon && (
@@ -39,13 +68,16 @@ export function PlatformCard({ platform, connected = false }: PlatformCardProps)
       </div>
 
       <Button
-        variant="outline"
+        variant={connected ? "outline" : "default"}
         size="sm"
-        disabled={platform.comingSoon}
+        disabled={platform.comingSoon || isLoading}
+        onClick={connected ? handleDisconnect : handleConnect}
         className="w-full"
       >
         {platform.comingSoon
           ? "Coming Soon"
+          : isLoading
+          ? "..."
           : connected
           ? "Disconnect"
           : "Connect"}
