@@ -1,10 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { exchangeYouTubeCode } from "./actions";
 
-export default function YouTubeCallbackPage() {
+function YouTubeCallbackInner() {
   const [status, setStatus] = useState("Connecting YouTube...");
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -28,7 +28,7 @@ export default function YouTubeCallbackPage() {
 
         if (!result.success) {
           setStatus(`Error: ${result.error}`);
-          setTimeout(() => router.push(`/dashboard?error=youtube_failed`), 3000);
+          setTimeout(() => router.push("/dashboard?error=youtube_failed"), 3000);
           return;
         }
 
@@ -44,11 +44,17 @@ export default function YouTubeCallbackPage() {
     handleCallback();
   }, [searchParams, router]);
 
+  return <p className="text-sm font-bold text-[#0A0A0A]">{status}</p>;
+}
+
+export default function YouTubeCallbackPage() {
   return (
     <div className="flex items-center justify-center min-h-[50vh]">
       <div className="text-center space-y-4">
         <div className="w-8 h-8 border-2 border-[#0A0A0A] border-t-[#C8FF00] animate-spin mx-auto" />
-        <p className="text-sm font-bold text-[#0A0A0A]">{status}</p>
+        <Suspense fallback={<p className="text-sm font-bold text-[#0A0A0A]">Loading...</p>}>
+          <YouTubeCallbackInner />
+        </Suspense>
       </div>
     </div>
   );
