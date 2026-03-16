@@ -7,7 +7,7 @@ export async function GET(request: NextRequest) {
 
   const params = new URLSearchParams({
     client_id: process.env.GOOGLE_CLIENT_ID ?? "",
-    redirect_uri: `${baseUrl}/auth/callback`,
+    redirect_uri: `${baseUrl}/youtube-callback`,
     response_type: "code",
     scope: [
       "https://www.googleapis.com/auth/youtube.upload",
