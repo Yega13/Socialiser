@@ -22,7 +22,7 @@ export async function GET(request: NextRequest) {
         code,
         client_id: process.env.GOOGLE_CLIENT_ID ?? "",
         client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-        redirect_uri: `${baseUrl}/auth/callback/youtube`,
+        redirect_uri: `${baseUrl}/connect/youtube`,
         grant_type: "authorization_code",
       }),
     });
