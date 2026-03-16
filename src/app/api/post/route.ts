@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "edge";
 
@@ -61,20 +60,29 @@ async function postToYouTube(
 }
 
 export async function POST(request: NextRequest) {
-  // Verify user via JWT — avoids importing next/headers which crashes on CF Workers
   const authHeader = request.headers.get("authorization");
   const token = authHeader?.replace("Bearer ", "");
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
-
-  const { data: { user } } = await supabase.auth.getUser(token);
-
-  if (!user) {
+  if (!token) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
+
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+
+  // Verify user via Supabase Auth REST API
+  const userRes = await fetch(`${supabaseUrl}/auth/v1/user`, {
+    headers: {
+      apikey: serviceRoleKey,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+
+  if (!userRes.ok) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const user = await userRes.json();
 
   const formData = await request.formData();
   const title = (formData.get("title") as string) ?? "";
@@ -87,13 +95,20 @@ export async function POST(request: NextRequest) {
   const results: Record<string, { success: boolean; error?: string }> = {};
 
   for (const platform of platforms) {
-    const { data: conn } = await supabase
-      .from("connected_platforms")
-      .select("*")
-      .eq("user_id", user.id)
-      .eq("platform", platform)
-      .eq("is_active", true)
-      .single();
+    // Fetch connected platform via REST API
+    const connRes = await fetch(
+      `${supabaseUrl}/rest/v1/connected_platforms?user_id=eq.${user.id}&platform=eq.${encodeURIComponent(platform)}&is_active=eq.true&limit=1`,
+      {
+        headers: {
+          apikey: serviceRoleKey,
+          Authorization: `Bearer ${serviceRoleKey}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const connData = await connRes.json();
+    const conn = connData?.[0];
 
     if (!conn) {
       results[platform] = { success: false, error: "Not connected" };
@@ -111,13 +126,22 @@ export async function POST(request: NextRequest) {
       const newToken = await refreshYouTubeToken(conn.refresh_token);
       if (newToken) {
         accessToken = newToken;
-        await supabase
-          .from("connected_platforms")
-          .update({
-            access_token: newToken,
-            token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
-          })
-          .eq("id", conn.id);
+        // Update token via REST API
+        await fetch(
+          `${supabaseUrl}/rest/v1/connected_platforms?id=eq.${conn.id}`,
+          {
+            method: "PATCH",
+            headers: {
+              apikey: serviceRoleKey,
+              Authorization: `Bearer ${serviceRoleKey}`,
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              access_token: newToken,
+              token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+            }),
+          }
+        );
       }
     }
 

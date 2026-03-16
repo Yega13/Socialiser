@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
 
 export const runtime = "edge";
 
@@ -31,7 +30,9 @@ export async function GET(request: NextRequest) {
     const tokens = await tokenRes.json();
 
     if (!tokens.access_token) {
-      return NextResponse.redirect(`${baseUrl}/dashboard?error=no_token`);
+      return NextResponse.redirect(
+        `${baseUrl}/dashboard?error=no_token&details=${encodeURIComponent(JSON.stringify(tokens))}`
+      );
     }
 
     // Get YouTube channel info
@@ -45,28 +46,42 @@ export async function GET(request: NextRequest) {
       channelTitle = channelData.items?.[0]?.snippet?.title ?? null;
     } catch {}
 
-    // Save using service role key — no cookies needed
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
-      process.env.SUPABASE_SERVICE_ROLE_KEY ?? ""
-    );
+    // Save to Supabase via REST API — no SDK needed, avoids module-level crashes
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
+    const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
 
     const expiresAt = tokens.expires_in
       ? new Date(Date.now() + tokens.expires_in * 1000).toISOString()
       : null;
 
-    await supabase.from("connected_platforms").upsert(
+    const upsertRes = await fetch(
+      `${supabaseUrl}/rest/v1/connected_platforms`,
       {
-        user_id: userId,
-        platform: "youtube",
-        platform_username: channelTitle,
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token ?? null,
-        token_expires_at: expiresAt,
-        is_active: true,
-      },
-      { onConflict: "user_id,platform" }
+        method: "POST",
+        headers: {
+          apikey: serviceRoleKey,
+          Authorization: `Bearer ${serviceRoleKey}`,
+          "Content-Type": "application/json",
+          Prefer: "resolution=merge-duplicates",
+        },
+        body: JSON.stringify({
+          user_id: userId,
+          platform: "youtube",
+          platform_username: channelTitle,
+          access_token: tokens.access_token,
+          refresh_token: tokens.refresh_token ?? null,
+          token_expires_at: expiresAt,
+          is_active: true,
+        }),
+      }
     );
+
+    if (!upsertRes.ok) {
+      const errBody = await upsertRes.text();
+      return NextResponse.redirect(
+        `${baseUrl}/dashboard?error=db_error&details=${encodeURIComponent(errBody)}`
+      );
+    }
 
     return NextResponse.redirect(`${baseUrl}/dashboard?connected=youtube`);
   } catch (err) {
