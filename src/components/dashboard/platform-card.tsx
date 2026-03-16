@@ -33,7 +33,23 @@ export function PlatformCard({
   }
 
   function handleConnect() {
-    window.location.href = `/api/auth/${platform.id}`;
+    if (platform.id === "youtube") {
+      const params = new URLSearchParams({
+        client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "",
+        redirect_uri: `${window.location.origin}/api/auth/callback/youtube`,
+        response_type: "code",
+        scope: [
+          "https://www.googleapis.com/auth/youtube.upload",
+          "https://www.googleapis.com/auth/youtube.readonly",
+          "https://www.googleapis.com/auth/userinfo.profile",
+        ].join(" "),
+        access_type: "offline",
+        prompt: "consent",
+      });
+      window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+    } else {
+      window.location.href = `/api/auth/${platform.id}`;
+    }
   }
 
   return (
