@@ -68,7 +68,7 @@ export function PlatformCard({
       </div>
 
       <Button
-        variant={connected ? "outline" : "default"}
+        variant={connected ? "outline" : "primary"}
         size="sm"
         disabled={platform.comingSoon || isLoading}
         onClick={connected ? handleDisconnect : handleConnect}
