@@ -5,8 +5,16 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
+import { refreshYouTubeToken } from "./actions";
 
-type ConnectedPlatform = { platform: string; platform_username: string | null };
+type ConnectedPlatform = {
+  id: string;
+  platform: string;
+  platform_username: string | null;
+  access_token: string;
+  refresh_token: string | null;
+  token_expires_at: string | null;
+};
 
 export default function ComposePage() {
   const [connected, setConnected] = useState<ConnectedPlatform[]>([]);
@@ -25,7 +33,7 @@ export default function ComposePage() {
     const supabase = createClient();
     supabase
       .from("connected_platforms")
-      .select("platform, platform_username")
+      .select("id, platform, platform_username, access_token, refresh_token, token_expires_at")
       .eq("is_active", true)
       .then(({ data }) => {
         if (data) {
@@ -40,21 +48,91 @@ export default function ComposePage() {
     setIsPosting(true);
 
     const supabase = createClient();
-    const { data: { session } } = await supabase.auth.getSession();
+    const postResults: Record<string, { success: boolean; error?: string }> = {};
 
-    const formData = new FormData();
-    formData.append("title", title);
-    formData.append("description", description);
-    formData.append("platforms", JSON.stringify(selected));
-    if (video) formData.append("video", video);
+    for (const platformId of selected) {
+      const conn = connected.find((c) => c.platform === platformId);
+      if (!conn) {
+        postResults[platformId] = { success: false, error: "Not connected" };
+        continue;
+      }
 
-    const res = await fetch("/api/post", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${session?.access_token ?? ""}` },
-      body: formData,
-    });
-    const data = await res.json();
-    setResults(data.results);
+      let accessToken = conn.access_token;
+
+      // Refresh token if expired
+      if (
+        conn.token_expires_at &&
+        new Date(conn.token_expires_at) <= new Date() &&
+        conn.refresh_token
+      ) {
+        const newToken = await refreshYouTubeToken(conn.refresh_token);
+        if (newToken) {
+          accessToken = newToken;
+          // Update token in DB
+          await supabase
+            .from("connected_platforms")
+            .update({
+              access_token: newToken,
+              token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+            })
+            .eq("id", conn.id);
+        }
+      }
+
+      if (platformId === "youtube") {
+        if (!video || video.size === 0) {
+          postResults[platformId] = {
+            success: false,
+            error: "YouTube requires a video file",
+          };
+        } else {
+          // Upload directly to YouTube from browser
+          const metadata = {
+            snippet: {
+              title: title || "New Video",
+              description: description || "",
+              categoryId: "22",
+            },
+            status: { privacyStatus: "public" },
+          };
+
+          const form = new FormData();
+          form.append(
+            "metadata",
+            new Blob([JSON.stringify(metadata)], { type: "application/json" })
+          );
+          form.append("video", video);
+
+          try {
+            const res = await fetch(
+              "https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart",
+              {
+                method: "POST",
+                headers: { Authorization: `Bearer ${accessToken}` },
+                body: form,
+              }
+            );
+
+            if (!res.ok) {
+              const err = await res.json().catch(() => ({}));
+              postResults[platformId] = {
+                success: false,
+                error: err?.error?.message ?? `YouTube error ${res.status}`,
+              };
+            } else {
+              postResults[platformId] = { success: true };
+            }
+          } catch (err) {
+            postResults[platformId] = {
+              success: false,
+              error: err instanceof Error ? err.message : "Upload failed",
+            };
+          }
+        }
+      }
+    }
+
+    setResults(postResults);
     setIsPosting(false);
   }
 
@@ -191,11 +269,11 @@ export default function ComposePage() {
                   result.success ? "text-green-600 font-bold" : "text-[#FF4F4F] font-bold"
                 }
               >
-                {result.success ? "✓" : "✗"}
+                {result.success ? "\u2713" : "\u2717"}
               </span>
               <span className="font-medium capitalize">{platform}</span>
               {result.error && (
-                <span className="text-[#5C5C5A]">— {result.error}</span>
+                <span className="text-[#5C5C5A]">&mdash; {result.error}</span>
               )}
             </div>
           ))}

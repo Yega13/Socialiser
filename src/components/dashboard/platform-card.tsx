@@ -25,15 +25,10 @@ export function PlatformCard({
     setIsLoading(true);
     const { createClient } = await import("@/lib/supabase/client");
     const supabase = createClient();
-    const { data: { session } } = await supabase.auth.getSession();
-    await fetch("/api/platforms/disconnect", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${session?.access_token ?? ""}`,
-      },
-      body: JSON.stringify({ platform: platform.id }),
-    });
+    await supabase
+      .from("connected_platforms")
+      .delete()
+      .eq("platform", platform.id);
     router.refresh();
     setIsLoading(false);
   }
