@@ -37,7 +37,7 @@ export const PLATFORMS = [
     description: "Publish photos & reels",
     icon: "IG",
     color: "#E1306C",
-    comingSoon: true,
+    comingSoon: false,
   },
   {
     id: "threads",

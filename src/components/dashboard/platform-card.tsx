@@ -54,6 +54,20 @@ export function PlatformCard({
         state: user.id,
       });
       window.location.href = `https://accounts.google.com/o/oauth2/v2/auth?${params}`;
+    } else if (platform.id === "instagram") {
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { window.location.href = "/login"; return; }
+
+      const params = new URLSearchParams({
+        client_id: process.env.NEXT_PUBLIC_FACEBOOK_APP_ID ?? "",
+        redirect_uri: `${window.location.origin}/instagram-callback`,
+        response_type: "code",
+        scope: "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement",
+        state: user.id,
+      });
+      window.location.href = `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
     } else {
       window.location.href = `/api/auth/${platform.id}`;
     }
