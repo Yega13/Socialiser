@@ -291,10 +291,13 @@ export default function ComposePage() {
         <button
           onClick={handlePost}
           disabled={!canPost}
-          className="w-full bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-6 py-3 font-bold text-[#0A0A0A] disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:translate-x-[2px] hover:enabled:translate-y-[2px] hover:enabled:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
+          className="w-full bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-6 py-3 font-bold text-[#0A0A0A] disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:translate-x-[2px] hover:enabled:translate-y-[2px] hover:enabled:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all flex items-center justify-center gap-3"
         >
+          {isPosting && (
+            <div className="w-5 h-5 border-2 border-[#0A0A0A] border-t-transparent animate-spin" />
+          )}
           {isPosting
-            ? "Posting..."
+            ? "Uploading..."
             : `Post to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`}
         </button>
       )}
