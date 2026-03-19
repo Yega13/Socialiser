@@ -61,7 +61,7 @@ export function PlatformCard({
       if (!user) { window.location.href = "/login"; return; }
 
       const params = new URLSearchParams({
-        client_id: "1502379878206222",
+        client_id: "786960820704998",
         redirect_uri: `${window.location.origin}/instagram-callback`,
         response_type: "code",
         scope: "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement",

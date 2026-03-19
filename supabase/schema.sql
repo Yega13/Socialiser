@@ -12,12 +12,13 @@ alter table public.profiles enable row level security;
 create policy "Owner read" on public.profiles for select using (auth.uid() = id);
 create policy "Owner update" on public.profiles for update using (auth.uid() = id);
 
--- Connected platforms (future use)
+-- Connected platforms
 create table public.connected_platforms (
   id uuid default gen_random_uuid() primary key,
   user_id uuid references auth.users(id) on delete cascade not null,
   platform text not null,
   platform_username text,
+  platform_user_id text,
   access_token text,
   refresh_token text,
   token_expires_at timestamptz,
@@ -45,3 +46,10 @@ create policy "Auth upload" on storage.objects for insert with check (
   bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
 create policy "Auth update" on storage.objects for update using (
   bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
+
+-- Storage policies for media bucket (Instagram uploads)
+create policy "Public read media" on storage.objects for select using (bucket_id = 'media');
+create policy "Auth upload media" on storage.objects for insert with check (
+  bucket_id = 'media' and auth.uid() is not null);
+create policy "Auth update media" on storage.objects for update using (
+  bucket_id = 'media' and auth.uid() is not null);
