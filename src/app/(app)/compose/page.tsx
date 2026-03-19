@@ -50,24 +50,24 @@ async function postToInstagram(
   isVideo: boolean
 ): Promise<{ success: boolean; error?: string }> {
   // Step 1: Create media container
-  const containerParams: Record<string, string> = {
-    caption,
-    access_token: accessToken,
-  };
+  const containerBody: Record<string, string> = { caption };
 
   if (isVideo) {
-    containerParams.media_type = "REELS";
-    containerParams.video_url = mediaUrl;
+    containerBody.media_type = "REELS";
+    containerBody.video_url = mediaUrl;
   } else {
-    containerParams.image_url = mediaUrl;
+    containerBody.image_url = mediaUrl;
   }
 
   const containerRes = await fetch(
     `https://graph.instagram.com/v21.0/${igUserId}/media`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(containerParams),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify(containerBody),
     }
   );
   const containerData = await containerRes.json();
@@ -83,7 +83,8 @@ async function postToInstagram(
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 3000));
       const statusRes = await fetch(
-        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
+        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code`,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
       );
       const statusData = await statusRes.json();
       if (statusData.status_code === "FINISHED") break;
@@ -98,8 +99,11 @@ async function postToInstagram(
     `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ creation_id: containerId, access_token: accessToken }),
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ creation_id: containerId }),
     }
   );
   const publishData = await publishRes.json();
