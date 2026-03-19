@@ -59,21 +59,26 @@ async function postToInstagram(
     containerBody.image_url = mediaUrl;
   }
 
-  const containerRes = await fetch(
-    `https://graph.instagram.com/v21.0/${igUserId}/media`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify(containerBody),
-    }
-  );
-  const containerData = await containerRes.json();
+  let containerData;
+  try {
+    const containerRes = await fetch(
+      `https://graph.instagram.com/v21.0/${igUserId}/media`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(containerBody),
+      }
+    );
+    containerData = await containerRes.json();
+  } catch (err) {
+    return { success: false, error: `Container request failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
 
   if (!containerData.id) {
-    return { success: false, error: containerData.error?.message ?? "Failed to create media container" };
+    return { success: false, error: containerData.error?.message ?? `Container failed: ${JSON.stringify(containerData)}` };
   }
 
   const containerId = containerData.id;
@@ -95,21 +100,26 @@ async function postToInstagram(
   }
 
   // Step 3: Publish
-  const publishRes = await fetch(
-    `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${accessToken}`,
-      },
-      body: JSON.stringify({ creation_id: containerId }),
-    }
-  );
-  const publishData = await publishRes.json();
+  let publishData;
+  try {
+    const publishRes = await fetch(
+      `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ creation_id: containerId }),
+      }
+    );
+    publishData = await publishRes.json();
+  } catch (err) {
+    return { success: false, error: `Publish request failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
 
   if (!publishData.id) {
-    return { success: false, error: publishData.error?.message ?? "Failed to publish" };
+    return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
   }
 
   return { success: true };
