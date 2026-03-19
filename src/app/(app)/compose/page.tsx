@@ -63,7 +63,7 @@ async function postToInstagram(
   }
 
   const containerRes = await fetch(
-    `https://graph.facebook.com/v21.0/${igUserId}/media`,
+    `https://graph.instagram.com/v21.0/${igUserId}/media`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -83,7 +83,7 @@ async function postToInstagram(
     for (let i = 0; i < 30; i++) {
       await new Promise((r) => setTimeout(r, 3000));
       const statusRes = await fetch(
-        `https://graph.facebook.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
+        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
       );
       const statusData = await statusRes.json();
       if (statusData.status_code === "FINISHED") break;
@@ -95,7 +95,7 @@ async function postToInstagram(
 
   // Step 3: Publish
   const publishRes = await fetch(
-    `https://graph.facebook.com/v21.0/${igUserId}/media_publish`,
+    `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },

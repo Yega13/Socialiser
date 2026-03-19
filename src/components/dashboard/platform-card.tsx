@@ -64,10 +64,10 @@ export function PlatformCard({
         client_id: "4194739344149912",
         redirect_uri: `${window.location.origin}/instagram-callback`,
         response_type: "code",
-        scope: "instagram_basic,instagram_content_publish,pages_show_list,pages_read_engagement",
+        scope: "instagram_business_basic,instagram_business_content_publish",
         state: user.id,
       });
-      window.location.href = `https://www.facebook.com/v21.0/dialog/oauth?${params}`;
+      window.location.href = `https://api.instagram.com/oauth/authorize?${params}`;
     } else {
       window.location.href = `/api/auth/${platform.id}`;
     }

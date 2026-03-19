@@ -21,12 +21,10 @@ export async function refreshInstagramToken(
   currentToken: string
 ): Promise<{ access_token: string; expires_in: number } | null> {
   const res = await fetch(
-    `https://graph.facebook.com/v21.0/oauth/access_token?` +
+    `https://graph.instagram.com/refresh_access_token?` +
       new URLSearchParams({
-        grant_type: "fb_exchange_token",
-        client_id: process.env.FACEBOOK_APP_ID ?? "",
-        client_secret: process.env.FACEBOOK_APP_SECRET ?? "",
-        fb_exchange_token: currentToken,
+        grant_type: "ig_refresh_token",
+        access_token: currentToken,
       }),
   );
   const data = await res.json();
