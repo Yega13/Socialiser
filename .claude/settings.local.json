@@ -25,7 +25,8 @@
       "Bash(npx wrangler:*)",
       "Bash(npx opennextjs-cloudflare:*)",
       "Bash(nvm list:*)",
-      "Bash(fnm list:*)"
+      "Bash(fnm list:*)",
+      "WebFetch(domain:gist.github.com)"
     ]
   }
 }
