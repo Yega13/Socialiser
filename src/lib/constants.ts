@@ -55,6 +55,22 @@ export const PLATFORMS = [
     color: "#010101",
     comingSoon: true,
   },
+  {
+    id: "facebook",
+    name: "Facebook",
+    description: "Share posts & stories",
+    icon: "fb",
+    color: "#1877F2",
+    comingSoon: true,
+  },
+  {
+    id: "vk",
+    name: "VKontakte",
+    description: "Post to VK communities",
+    icon: "VK",
+    color: "#0077FF",
+    comingSoon: true,
+  },
 ] as const;
 
 export type Platform = (typeof PLATFORMS)[number];
