@@ -12,8 +12,8 @@ export async function exchangeInstagramCode(
   ig_username?: string;
 }> {
   try {
-    const appId = process.env.FACEBOOK_APP_ID ?? "";
-    const appSecret = process.env.FACEBOOK_APP_SECRET ?? "";
+    const appId = process.env.INSTAGRAM_APP_ID ?? "";
+    const appSecret = process.env.INSTAGRAM_APP_SECRET ?? "";
 
     // Step 1: Exchange code for short-lived token
     const tokenRes = await fetch("https://api.instagram.com/oauth/access_token", {
