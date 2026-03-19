@@ -65,7 +65,7 @@ export const PLATFORMS = [
   },
   {
     id: "vk",
-    name: "VKontakte",
+    name: "VK",
     description: "Post to VK communities",
     icon: "VK",
     color: "#0077FF",
