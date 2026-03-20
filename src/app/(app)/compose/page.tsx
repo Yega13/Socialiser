@@ -179,6 +179,8 @@ export default function ComposePage() {
   const [aspectMode, setAspectMode] = useState<AspectMode>("original");
   const [imageQuality, setImageQuality] = useState(92);
   const [filters, setFilters] = useState<FilterSettings>({ brightness: 100, contrast: 100, saturation: 100 });
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
   const [scheduleDate, setScheduleDate] = useState("");
   const [isPosting, setIsPosting] = useState(false);
   const [postingStatus, setPostingStatus] = useState("");
@@ -546,9 +548,6 @@ export default function ComposePage() {
       {/* Left — form */}
       <div className="flex-1 min-w-0 space-y-6">
         <div>
-          <a href="/dashboard" className="inline-flex items-center gap-1 text-sm font-bold text-[#5C5C5A] hover:text-[#0A0A0A] transition-colors mb-2">
-            ← Dashboard
-          </a>
           <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">
             New Post
           </h1>
@@ -773,41 +772,51 @@ export default function ComposePage() {
         {/* Image filters */}
         {instagramSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
           <div>
-            <div className="flex items-center justify-between mb-2">
-              <label className="font-bold text-sm text-[#0A0A0A]">
-                Filters
-              </label>
+            <button
+              type="button"
+              onClick={() => setFiltersOpen((v) => !v)}
+              className="flex items-center gap-2 w-full"
+            >
+              <span className={cn("text-xs text-[#0A0A0A] transition-transform", filtersOpen && "rotate-90")}>
+                ▶
+              </span>
+              <span className="font-bold text-sm text-[#0A0A0A]">Filters</span>
               {(filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100) && (
-                <button
-                  onClick={() => setFilters({ brightness: 100, contrast: 100, saturation: 100 })}
-                  className="text-xs text-[#0095F6] font-bold hover:underline"
-                >
-                  Reset
-                </button>
+                <span className="text-[10px] font-bold px-1.5 py-0.5 bg-[#7C3AED] text-white ml-auto">ACTIVE</span>
               )}
-            </div>
-            <div className="space-y-3">
-              {([
-                { key: "brightness" as const, label: "Brightness" },
-                { key: "contrast" as const, label: "Contrast" },
-                { key: "saturation" as const, label: "Saturation" },
-              ]).map(({ key, label }) => (
-                <div key={key}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-xs text-[#5C5C5A]">{label}</span>
-                    <span className="text-xs font-bold text-[#0A0A0A] w-10 text-right">{filters[key]}%</span>
+            </button>
+            {filtersOpen && (
+              <div className="mt-3 space-y-3">
+                {(filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100) && (
+                  <button
+                    onClick={() => setFilters({ brightness: 100, contrast: 100, saturation: 100 })}
+                    className="text-xs text-[#0095F6] font-bold hover:underline"
+                  >
+                    Reset
+                  </button>
+                )}
+                {([
+                  { key: "brightness" as const, label: "Brightness" },
+                  { key: "contrast" as const, label: "Contrast" },
+                  { key: "saturation" as const, label: "Saturation" },
+                ]).map(({ key, label }) => (
+                  <div key={key}>
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs text-[#5C5C5A]">{label}</span>
+                      <span className="text-xs font-bold text-[#0A0A0A] w-10 text-right">{filters[key]}%</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0}
+                      max={200}
+                      value={filters[key]}
+                      onChange={(e) => setFilters((f) => ({ ...f, [key]: Number(e.target.value) }))}
+                      className="w-full accent-[#0A0A0A] h-2 cursor-pointer"
+                    />
                   </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={200}
-                    value={filters[key]}
-                    onChange={(e) => setFilters((f) => ({ ...f, [key]: Number(e.target.value) }))}
-                    className="w-full accent-[#0A0A0A] h-2 cursor-pointer"
-                  />
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -838,28 +847,28 @@ export default function ComposePage() {
         {/* Schedule & Post */}
         {!results && (
           <div className="space-y-3">
-            {/* Schedule picker */}
+            {/* Schedule toggle */}
             <div>
-              <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
-                Schedule
-                <span className="font-normal text-[#5C5C5A] ml-2">
-                  {scheduleDate ? "Will post at scheduled time" : "Leave empty to post now"}
-                </span>
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={scheduleEnabled}
+                  onChange={(e) => {
+                    setScheduleEnabled(e.target.checked);
+                    if (!e.target.checked) setScheduleDate("");
+                  }}
+                  className="w-4 h-4 accent-[#7C3AED] cursor-pointer"
+                />
+                <span className="font-bold text-sm text-[#0A0A0A]">Schedule for later</span>
               </label>
-              <input
-                type="datetime-local"
-                value={scheduleDate}
-                onChange={(e) => setScheduleDate(e.target.value)}
-                min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
-                className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
-              />
-              {scheduleDate && (
-                <button
-                  onClick={() => setScheduleDate("")}
-                  className="text-xs text-[#0095F6] font-bold mt-1 hover:underline"
-                >
-                  Clear schedule (post now instead)
-                </button>
+              {scheduleEnabled && (
+                <input
+                  type="datetime-local"
+                  value={scheduleDate}
+                  onChange={(e) => setScheduleDate(e.target.value)}
+                  min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                  className="mt-2 w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
+                />
               )}
             </div>
 

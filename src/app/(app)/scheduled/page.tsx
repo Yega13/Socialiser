@@ -77,9 +77,6 @@ export default function ScheduledPage() {
   return (
     <div className="max-w-2xl space-y-6">
       <div>
-        <a href="/dashboard" className="inline-flex items-center gap-1 text-sm font-bold text-[#5C5C5A] hover:text-[#0A0A0A] transition-colors mb-2">
-          ← Dashboard
-        </a>
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">Scheduled Posts</h1>
