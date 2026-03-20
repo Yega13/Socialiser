@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken, postToInstagramServer } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, postToInstagramServer, postCarouselToInstagram } from "./actions";
 
 type ConnectedPlatform = {
   id: string;
@@ -15,6 +15,12 @@ type ConnectedPlatform = {
   access_token: string;
   refresh_token: string | null;
   token_expires_at: string | null;
+};
+
+type MediaItem = {
+  file: File;
+  preview: string;
+  needsPadding: boolean;
 };
 
 const PAD_COLORS = [
@@ -49,23 +55,61 @@ async function postToYouTube(
   return { success: true };
 }
 
+async function prepareImageForInstagram(file: File, padColor: string): Promise<{ blob: Blob; name: string }> {
+  const img = new Image();
+  const blobUrl = URL.createObjectURL(file);
+  await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
+  URL.revokeObjectURL(blobUrl);
+
+  const { width, height } = img;
+  const ratio = width / height;
+  const minRatio = 4 / 5;
+  const maxRatio = 1.91;
+
+  const canvas = document.createElement("canvas");
+  let drawX = 0, drawY = 0;
+
+  if (ratio < minRatio) {
+    const newWidth = Math.ceil(height * minRatio);
+    canvas.width = newWidth;
+    canvas.height = height;
+    drawX = Math.floor((newWidth - width) / 2);
+  } else if (ratio > maxRatio) {
+    const newHeight = Math.ceil(width / maxRatio);
+    canvas.width = width;
+    canvas.height = newHeight;
+    drawY = Math.floor((newHeight - height) / 2);
+  } else {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  const ctx = canvas.getContext("2d")!;
+  ctx.fillStyle = padColor;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(img, drawX, drawY);
+
+  const blob = await new Promise<Blob>((resolve) =>
+    canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.92)
+  );
+  return { blob, name: file.name.replace(/\.[^.]+$/, ".jpg") };
+}
+
 export default function ComposePage() {
   const [connected, setConnected] = useState<ConnectedPlatform[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [mediaFile, setMediaFile] = useState<File | null>(null);
-  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
+  const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [padColor, setPadColor] = useState("#FFFFFF");
-  const [needsPadding, setNeedsPadding] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [postingStatus, setPostingStatus] = useState("");
   const [results, setResults] = useState<Record<
     string,
     { success: boolean; error?: string }
   > | null>(null);
+  const [previewIndex, setPreviewIndex] = useState(0);
   const router = useRouter();
-  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -81,29 +125,39 @@ export default function ComposePage() {
       });
   }, []);
 
-  function handleFileChange(file: File | null) {
-    setMediaFile(file);
-    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+  async function handleFilesChange(files: FileList | null) {
+    if (!files || files.length === 0) return;
 
-    if (!file) {
-      setMediaPreview(null);
-      setNeedsPadding(false);
-      return;
-    }
+    // Clean up old previews
+    mediaItems.forEach((item) => URL.revokeObjectURL(item.preview));
 
-    const url = URL.createObjectURL(file);
-    setMediaPreview(url);
+    const newItems: MediaItem[] = [];
+    const maxFiles = instagramSelected ? 10 : 1;
+    const filesToAdd = Array.from(files).slice(0, maxFiles);
 
-    if (file.type.startsWith("image/")) {
-      const img = new Image();
-      img.onload = () => {
+    for (const file of filesToAdd) {
+      const preview = URL.createObjectURL(file);
+      let needsPadding = false;
+
+      if (file.type.startsWith("image/")) {
+        const img = new Image();
+        await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = preview; });
         const ratio = img.width / img.height;
-        setNeedsPadding(ratio < 4 / 5 || ratio > 1.91);
-      };
-      img.src = url;
-    } else {
-      setNeedsPadding(false);
+        needsPadding = ratio < 4 / 5 || ratio > 1.91;
+      }
+
+      newItems.push({ file, preview, needsPadding });
     }
+
+    setMediaItems(newItems);
+    setPreviewIndex(0);
+  }
+
+  function removeMediaItem(index: number) {
+    URL.revokeObjectURL(mediaItems[index].preview);
+    const updated = mediaItems.filter((_, i) => i !== index);
+    setMediaItems(updated);
+    if (previewIndex >= updated.length) setPreviewIndex(Math.max(0, updated.length - 1));
   }
 
   async function handlePost() {
@@ -148,86 +202,78 @@ export default function ComposePage() {
       }
 
       if (platformId === "youtube") {
-        if (!mediaFile || mediaFile.size === 0 || !mediaFile.type.startsWith("video/")) {
+        const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
+        if (!videoItem) {
           postResults[platformId] = { success: false, error: "YouTube requires a video file" };
         } else {
           setPostingStatus("Uploading to YouTube...");
-          postResults[platformId] = await postToYouTube(accessToken, title, description, mediaFile);
+          postResults[platformId] = await postToYouTube(accessToken, title, description, videoItem.file);
         }
       }
 
       if (platformId === "instagram") {
-        if (!mediaFile || mediaFile.size === 0) {
-          postResults[platformId] = { success: false, error: "Instagram requires an image or video" };
+        if (mediaItems.length === 0) {
+          postResults[platformId] = { success: false, error: "Instagram requires at least one image or video" };
         } else if (!conn.platform_user_id) {
           postResults[platformId] = { success: false, error: "Instagram account ID missing. Reconnect." };
         } else {
-          const isVideo = mediaFile.type.startsWith("video/");
+          // Upload all media files to Supabase
+          const uploadedItems: { url: string; isVideo: boolean }[] = [];
+          let uploadFailed = false;
 
-          // Convert to JPEG and fix aspect ratio for Instagram (4:5 to 1.91:1)
-          let fileToUpload: File | Blob = mediaFile;
-          let uploadName = mediaFile.name;
-          if (!isVideo) {
-            setPostingStatus("Preparing image for Instagram...");
-            const img = new Image();
-            const blobUrl = URL.createObjectURL(mediaFile);
-            await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
-            URL.revokeObjectURL(blobUrl);
+          for (let i = 0; i < mediaItems.length; i++) {
+            const item = mediaItems[i];
+            const isVideo = item.file.type.startsWith("video/");
 
-            const { width, height } = img;
-            const ratio = width / height;
-            const minRatio = 4 / 5;
-            const maxRatio = 1.91;
+            setPostingStatus(`Uploading file ${i + 1}/${mediaItems.length}...`);
 
-            const canvas = document.createElement("canvas");
-            let drawX = 0, drawY = 0;
+            let fileToUpload: File | Blob = item.file;
+            let uploadName = item.file.name;
 
-            if (ratio < minRatio) {
-              const newWidth = Math.ceil(height * minRatio);
-              canvas.width = newWidth;
-              canvas.height = height;
-              drawX = Math.floor((newWidth - width) / 2);
-            } else if (ratio > maxRatio) {
-              const newHeight = Math.ceil(width / maxRatio);
-              canvas.width = width;
-              canvas.height = newHeight;
-              drawY = Math.floor((newHeight - height) / 2);
-            } else {
-              canvas.width = width;
-              canvas.height = height;
+            if (!isVideo) {
+              const prepared = await prepareImageForInstagram(item.file, padColor);
+              fileToUpload = prepared.blob;
+              uploadName = prepared.name;
             }
 
-            const ctx = canvas.getContext("2d")!;
-            ctx.fillStyle = padColor;
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            ctx.drawImage(img, drawX, drawY);
+            const fileName = `instagram/${Date.now()}-${i}-${uploadName}`;
+            const { error: uploadError } = await supabase.storage
+              .from("media")
+              .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
 
-            const jpegBlob = await new Promise<Blob>((resolve) =>
-              canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.92)
-            );
-            fileToUpload = jpegBlob;
-            uploadName = mediaFile.name.replace(/\.[^.]+$/, ".jpg");
+            if (uploadError) {
+              postResults[platformId] = { success: false, error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
+              uploadFailed = true;
+              break;
+            }
+
+            const { data: urlData } = supabase.storage.from("media").getPublicUrl(fileName);
+            uploadedItems.push({ url: urlData.publicUrl, isVideo });
           }
 
-          setPostingStatus("Uploading media...");
-          const fileName = `instagram/${Date.now()}-${uploadName}`;
-          const { error: uploadError } = await supabase.storage
-            .from("media")
-            .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? mediaFile.type : "image/jpeg" });
+          if (!uploadFailed) {
+            const caption = `${title}${description ? "\n\n" + description : ""}`;
 
-          if (uploadError) {
-            postResults[platformId] = { success: false, error: `Upload failed: ${uploadError.message}` };
-          } else {
-            const { data: urlData } = supabase.storage.from("media").getPublicUrl(fileName);
-
-            setPostingStatus(isVideo ? "Publishing reel (this may take a minute)..." : "Publishing to Instagram...");
-            postResults[platformId] = await postToInstagramServer(
-              accessToken,
-              conn.platform_user_id,
-              `${title}${description ? "\n\n" + description : ""}`,
-              urlData.publicUrl,
-              isVideo
-            );
+            if (uploadedItems.length === 1) {
+              // Single post
+              setPostingStatus(uploadedItems[0].isVideo ? "Publishing reel..." : "Publishing to Instagram...");
+              postResults[platformId] = await postToInstagramServer(
+                accessToken,
+                conn.platform_user_id,
+                caption,
+                uploadedItems[0].url,
+                uploadedItems[0].isVideo
+              );
+            } else {
+              // Carousel post
+              setPostingStatus(`Publishing carousel (${uploadedItems.length} items)...`);
+              postResults[platformId] = await postCarouselToInstagram(
+                accessToken,
+                conn.platform_user_id,
+                caption,
+                uploadedItems
+              );
+            }
           }
         }
       }
@@ -247,16 +293,19 @@ export default function ComposePage() {
   const youtubeSelected = selected.includes("youtube");
   const instagramSelected = selected.includes("instagram");
   const needsMedia = youtubeSelected || instagramSelected;
+  const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const canPost =
     !isPosting &&
     selected.length > 0 &&
     title.trim().length > 0 &&
-    (!needsMedia || (mediaFile !== null && mediaFile.size > 0)) &&
-    (!youtubeSelected || (mediaFile !== null && mediaFile.type.startsWith("video/")));
+    (!needsMedia || mediaItems.length > 0) &&
+    (!youtubeSelected || mediaItems.some((m) => m.file.type.startsWith("video/")));
 
   const acceptTypes = youtubeSelected && !instagramSelected
     ? "video/*"
     : "image/*,video/*";
+
+  const currentPreview = mediaItems[previewIndex] ?? null;
 
   return (
     <div className="flex gap-8 max-w-4xl">
@@ -353,32 +402,48 @@ export default function ComposePage() {
                 ? "Media (video for YouTube, image or video for Instagram)"
                 : youtubeSelected
                 ? "Video"
-                : "Photo or Video"}
+                : "Photos & Videos"}
               {" "}<span className="text-[#FF4F4F]">*</span>
+              {instagramSelected && (
+                <span className="font-normal text-[#5C5C5A] ml-2">Up to 10 for carousel</span>
+              )}
             </label>
             <input
               type="file"
               accept={acceptTypes}
-              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+              multiple={instagramSelected}
+              onChange={(e) => handleFilesChange(e.target.files)}
               className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] cursor-pointer"
             />
-            {mediaFile && (
-              <div className="text-xs text-[#5C5C5A] mt-1">
-                {mediaFile.name} ({(mediaFile.size / 1024 / 1024).toFixed(1)} MB)
-                {youtubeSelected && !mediaFile.type.startsWith("video/") && (
-                  <span className="text-[#FF4F4F] ml-2">YouTube requires a video file</span>
-                )}
+            {mediaItems.length > 0 && (
+              <div className="mt-2 space-y-1">
+                {mediaItems.map((item, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-[#5C5C5A]">
+                    <span className="font-bold text-[#0A0A0A] w-5">{i + 1}.</span>
+                    <span className="truncate flex-1">{item.file.name}</span>
+                    <span>({(item.file.size / 1024 / 1024).toFixed(1)} MB)</span>
+                    {item.needsPadding && instagramSelected && (
+                      <span className="text-[#FF4F4F] font-bold text-[10px]">PAD</span>
+                    )}
+                    <button
+                      onClick={() => removeMediaItem(i)}
+                      className="text-[#FF4F4F] font-black hover:scale-110 transition-transform px-1"
+                    >
+                      x
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
           </div>
         )}
 
-        {/* Padding color picker — only when image needs padding and Instagram is selected */}
-        {instagramSelected && needsPadding && mediaFile && !mediaFile.type.startsWith("video/") && (
+        {/* Padding color picker */}
+        {instagramSelected && hasAnyPadding && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Padding color
-              <span className="font-normal text-[#5C5C5A] ml-2">Image ratio needs adjustment</span>
+              <span className="font-normal text-[#5C5C5A] ml-2">For images that need ratio adjustment</span>
             </label>
             <div className="flex gap-2">
               {PAD_COLORS.map((c) => (
@@ -443,6 +508,8 @@ export default function ComposePage() {
               )}
               {isPosting
                 ? "Uploading..."
+                : mediaItems.length > 1 && instagramSelected
+                ? `Post carousel to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`
                 : `Post to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`}
             </button>
             {isPosting && postingStatus && (
@@ -453,34 +520,83 @@ export default function ComposePage() {
       </div>
 
       {/* Right — media preview */}
-      {mediaPreview && (
+      {mediaItems.length > 0 && (
         <div className="hidden md:block w-72 shrink-0">
           <div className="sticky top-24 space-y-3">
-            <div className="font-bold text-sm text-[#0A0A0A]">Preview</div>
+            <div className="flex items-center justify-between">
+              <div className="font-bold text-sm text-[#0A0A0A]">Preview</div>
+              {mediaItems.length > 1 && (
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPreviewIndex((p) => Math.max(0, p - 1))}
+                    disabled={previewIndex === 0}
+                    className="w-7 h-7 border border-[#0A0A0A] bg-[#F9F9F7] font-black text-xs disabled:opacity-30 hover:enabled:bg-[#C8FF00] transition-colors"
+                  >
+                    &lt;
+                  </button>
+                  <span className="text-xs font-bold text-[#0A0A0A]">
+                    {previewIndex + 1}/{mediaItems.length}
+                  </span>
+                  <button
+                    onClick={() => setPreviewIndex((p) => Math.min(mediaItems.length - 1, p + 1))}
+                    disabled={previewIndex === mediaItems.length - 1}
+                    className="w-7 h-7 border border-[#0A0A0A] bg-[#F9F9F7] font-black text-xs disabled:opacity-30 hover:enabled:bg-[#C8FF00] transition-colors"
+                  >
+                    &gt;
+                  </button>
+                </div>
+              )}
+            </div>
             <div className="border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] overflow-hidden bg-[#0A0A0A]">
-              {mediaFile?.type.startsWith("video/") ? (
+              {currentPreview?.file.type.startsWith("video/") ? (
                 <video
-                  ref={videoRef}
-                  src={mediaPreview}
+                  key={currentPreview.preview}
+                  src={currentPreview.preview}
                   controls
                   className="w-full"
                 />
-              ) : (
+              ) : currentPreview ? (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
-                  src={mediaPreview}
+                  src={currentPreview.preview}
                   alt="Preview"
                   className="w-full"
                 />
-              )}
+              ) : null}
             </div>
-            {mediaFile && (
+            {currentPreview && (
               <div className="text-xs text-[#5C5C5A] space-y-1">
-                <div>{mediaFile.name}</div>
-                <div>{(mediaFile.size / 1024 / 1024).toFixed(1)} MB</div>
-                {needsPadding && instagramSelected && !mediaFile.type.startsWith("video/") && (
+                <div className="truncate">{currentPreview.file.name}</div>
+                <div>{(currentPreview.file.size / 1024 / 1024).toFixed(1)} MB</div>
+                {currentPreview.needsPadding && instagramSelected && !currentPreview.file.type.startsWith("video/") && (
                   <div className="text-[#FF4F4F] font-bold">Padding will be added for Instagram</div>
                 )}
+              </div>
+            )}
+            {/* Thumbnail strip */}
+            {mediaItems.length > 1 && (
+              <div className="flex gap-1.5 overflow-x-auto pb-1">
+                {mediaItems.map((item, i) => (
+                  <button
+                    key={i}
+                    onClick={() => setPreviewIndex(i)}
+                    className={cn(
+                      "w-12 h-12 shrink-0 border-2 overflow-hidden transition-all",
+                      i === previewIndex
+                        ? "border-[#C8FF00] shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "border-[#0A0A0A] opacity-60"
+                    )}
+                  >
+                    {item.file.type.startsWith("video/") ? (
+                      <div className="w-full h-full bg-[#0A0A0A] flex items-center justify-center text-[#F9F9F7] text-[10px] font-black">
+                        VID
+                      </div>
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={item.preview} alt="" className="w-full h-full object-cover" />
+                    )}
+                  </button>
+                ))}
               </div>
             )}
           </div>

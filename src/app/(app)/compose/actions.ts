@@ -34,6 +34,50 @@ export async function refreshInstagramToken(
   return null;
 }
 
+async function createIgContainer(
+  accessToken: string,
+  igUserId: string,
+  params: Record<string, string>,
+): Promise<{ id?: string; error?: string }> {
+  const res = await fetch(
+    `https://graph.instagram.com/v21.0/${igUserId}/media`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...params, access_token: accessToken }),
+    }
+  );
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch {
+    return { error: `API non-JSON (${res.status}): ${text.slice(0, 200)}` };
+  }
+  if (!data.id) {
+    const detail = data.error
+      ? `[${data.error.code}] ${data.error.message}`
+      : JSON.stringify(data);
+    return { error: `Container failed (${res.status}): ${detail}` };
+  }
+  return { id: data.id };
+}
+
+async function waitForContainer(
+  accessToken: string,
+  containerId: string,
+): Promise<string | null> {
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const res = await fetch(
+      `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
+    );
+    const data = await res.json();
+    if (data.status_code === "FINISHED") return null;
+    if (data.status_code === "ERROR") return "Media processing failed";
+  }
+  return "Media processing timed out";
+}
+
+// Single image or video post
 export async function postToInstagramServer(
   accessToken: string,
   igUserId: string,
@@ -42,55 +86,79 @@ export async function postToInstagramServer(
   isVideo: boolean
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Step 1: Create media container
-    const containerParams: Record<string, string> = {
-      caption,
-      access_token: accessToken,
-    };
+    const params: Record<string, string> = { caption };
     if (isVideo) {
-      containerParams.media_type = "REELS";
-      containerParams.video_url = mediaUrl;
+      params.media_type = "REELS";
+      params.video_url = mediaUrl;
     } else {
-      containerParams.image_url = mediaUrl;
+      params.image_url = mediaUrl;
     }
 
-    const containerRes = await fetch(
-      `https://graph.instagram.com/v21.0/${igUserId}/media`,
+    const container = await createIgContainer(accessToken, igUserId, params);
+    if (!container.id) return { success: false, error: container.error };
+
+    const waitErr = await waitForContainer(accessToken, container.id);
+    if (waitErr) return { success: false, error: waitErr };
+
+    const publishRes = await fetch(
+      `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams(containerParams),
+        body: new URLSearchParams({ creation_id: container.id, access_token: accessToken }),
       }
     );
-    const containerText = await containerRes.text();
-    let containerData;
-    try {
-      containerData = JSON.parse(containerText);
-    } catch {
-      return { success: false, error: `API returned non-JSON (${containerRes.status}): ${containerText.slice(0, 200)}` };
+    const publishData = await publishRes.json();
+
+    if (!publishData.id) {
+      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Carousel post (2-10 items, mix of images and videos)
+export async function postCarouselToInstagram(
+  accessToken: string,
+  igUserId: string,
+  caption: string,
+  items: { url: string; isVideo: boolean }[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (items.length < 2 || items.length > 10) {
+      return { success: false, error: "Carousel requires 2-10 items" };
     }
 
-    if (!containerData.id) {
-      const errDetail = containerData.error
-        ? `[${containerData.error.code}] ${containerData.error.type}: ${containerData.error.message} (fbtrace: ${containerData.error.fbtrace_id})`
-        : JSON.stringify(containerData);
-      return { success: false, error: `Container failed (${containerRes.status}): ${errDetail}` };
-    }
-
-    const containerId = containerData.id;
-
-    // Step 2: Poll until container is ready (images and videos)
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
-      const statusRes = await fetch(
-        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
-      );
-      const statusData = await statusRes.json();
-      if (statusData.status_code === "FINISHED") break;
-      if (statusData.status_code === "ERROR") {
-        return { success: false, error: "Instagram media processing failed" };
+    // Step 1: Create a container for each item (no caption on children)
+    const childIds: string[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const params: Record<string, string> = { is_carousel_item: "true" };
+      if (item.isVideo) {
+        params.media_type = "VIDEO";
+        params.video_url = item.url;
+      } else {
+        params.image_url = item.url;
       }
+
+      const container = await createIgContainer(accessToken, igUserId, params);
+      if (!container.id) return { success: false, error: `Item ${i + 1}: ${container.error}` };
+
+      const waitErr = await waitForContainer(accessToken, container.id);
+      if (waitErr) return { success: false, error: `Item ${i + 1}: ${waitErr}` };
+
+      childIds.push(container.id);
     }
+
+    // Step 2: Create carousel container
+    const carouselContainer = await createIgContainer(accessToken, igUserId, {
+      media_type: "CAROUSEL",
+      caption,
+      children: childIds.join(","),
+    });
+    if (!carouselContainer.id) return { success: false, error: carouselContainer.error };
 
     // Step 3: Publish
     const publishRes = await fetch(
@@ -98,22 +166,14 @@ export async function postToInstagramServer(
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({
-          creation_id: containerId,
-          access_token: accessToken,
-        }),
+        body: new URLSearchParams({ creation_id: carouselContainer.id, access_token: accessToken }),
       }
     );
     const publishData = await publishRes.json();
 
     if (!publishData.id) {
-      return {
-        success: false,
-        error: publishData.error?.message
-          ?? `Publish failed (${publishRes.status}): ${JSON.stringify(publishData)}`,
-      };
+      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
     }
-
     return { success: true };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
