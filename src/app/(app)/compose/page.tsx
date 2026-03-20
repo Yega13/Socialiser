@@ -23,6 +23,15 @@ type MediaItem = {
   needsPadding: boolean;
 };
 
+const ASPECT_MODES = [
+  { id: "original", label: "Original", ratio: null, icon: "↔" },
+  { id: "square", label: "1:1", ratio: 1, icon: "□" },
+  { id: "portrait", label: "4:5", ratio: 4 / 5, icon: "▯" },
+  { id: "landscape", label: "1.91:1", ratio: 1.91, icon: "▭" },
+] as const;
+
+type AspectMode = (typeof ASPECT_MODES)[number]["id"];
+
 const PAD_COLORS = [
   { label: "White", value: "#FFFFFF" },
   { label: "Black", value: "#000000" },
@@ -55,7 +64,12 @@ async function postToYouTube(
   return { success: true };
 }
 
-async function prepareImageForInstagram(file: File, padColor: string, quality = 0.92): Promise<{ blob: Blob; name: string }> {
+async function prepareImageForInstagram(
+  file: File,
+  padColor: string,
+  quality = 0.92,
+  targetRatio: number | null = null,
+): Promise<{ blob: Blob; name: string }> {
   const img = new Image();
   const blobUrl = URL.createObjectURL(file);
   await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
@@ -63,31 +77,50 @@ async function prepareImageForInstagram(file: File, padColor: string, quality = 
 
   const { width, height } = img;
   const ratio = width / height;
-  const minRatio = 4 / 5;
-  const maxRatio = 1.91;
-
   const canvas = document.createElement("canvas");
-  let drawX = 0, drawY = 0;
 
-  if (ratio < minRatio) {
-    const newWidth = Math.ceil(height * minRatio);
-    canvas.width = newWidth;
-    canvas.height = height;
-    drawX = Math.floor((newWidth - width) / 2);
-  } else if (ratio > maxRatio) {
-    const newHeight = Math.ceil(width / maxRatio);
-    canvas.width = width;
-    canvas.height = newHeight;
-    drawY = Math.floor((newHeight - height) / 2);
+  if (targetRatio !== null) {
+    // Crop mode: center-crop to target ratio
+    let srcX = 0, srcY = 0, srcW = width, srcH = height;
+    if (ratio > targetRatio) {
+      // Image is wider — crop sides
+      srcW = Math.round(height * targetRatio);
+      srcX = Math.round((width - srcW) / 2);
+    } else if (ratio < targetRatio) {
+      // Image is taller — crop top/bottom
+      srcH = Math.round(width / targetRatio);
+      srcY = Math.round((height - srcH) / 2);
+    }
+    canvas.width = srcW;
+    canvas.height = srcH;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
   } else {
-    canvas.width = width;
-    canvas.height = height;
-  }
+    // Original mode: pad if outside Instagram's 4:5–1.91:1 range
+    const minRatio = 4 / 5;
+    const maxRatio = 1.91;
+    let drawX = 0, drawY = 0;
 
-  const ctx = canvas.getContext("2d")!;
-  ctx.fillStyle = padColor;
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(img, drawX, drawY);
+    if (ratio < minRatio) {
+      const newWidth = Math.ceil(height * minRatio);
+      canvas.width = newWidth;
+      canvas.height = height;
+      drawX = Math.floor((newWidth - width) / 2);
+    } else if (ratio > maxRatio) {
+      const newHeight = Math.ceil(width / maxRatio);
+      canvas.width = width;
+      canvas.height = newHeight;
+      drawY = Math.floor((newHeight - height) / 2);
+    } else {
+      canvas.width = width;
+      canvas.height = height;
+    }
+
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = padColor;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, drawX, drawY);
+  }
 
   const blob = await new Promise<Blob>((resolve) =>
     canvas.toBlob((b) => resolve(b!), "image/jpeg", quality)
@@ -102,6 +135,7 @@ export default function ComposePage() {
   const [description, setDescription] = useState("");
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [padColor, setPadColor] = useState("#FFFFFF");
+  const [aspectMode, setAspectMode] = useState<AspectMode>("original");
   const [imageQuality, setImageQuality] = useState(92);
   const [isPosting, setIsPosting] = useState(false);
   const [postingStatus, setPostingStatus] = useState("");
@@ -232,7 +266,8 @@ export default function ComposePage() {
             let uploadName = item.file.name;
 
             if (!isVideo) {
-              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100);
+              const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio);
               fileToUpload = prepared.blob;
               uploadName = prepared.name;
             }
@@ -427,8 +462,11 @@ export default function ComposePage() {
                     <span className="font-bold text-[#0A0A0A] w-5">{i + 1}.</span>
                     <span className="truncate flex-1">{item.file.name}</span>
                     <span>({(item.file.size / 1024 / 1024).toFixed(1)} MB)</span>
-                    {item.needsPadding && instagramSelected && (
+                    {item.needsPadding && instagramSelected && aspectMode === "original" && (
                       <span className="text-[#FF4F4F] font-bold text-[10px]">PAD</span>
+                    )}
+                    {!item.file.type.startsWith("video/") && instagramSelected && aspectMode !== "original" && (
+                      <span className="text-[#0095F6] font-bold text-[10px]">CROP</span>
                     )}
                     <button
                       onClick={() => removeMediaItem(i)}
@@ -443,8 +481,37 @@ export default function ComposePage() {
           </div>
         )}
 
+        {/* Aspect ratio selector */}
+        {instagramSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+          <div>
+            <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+              Crop mode
+              <span className="font-normal text-[#5C5C5A] ml-2">
+                {aspectMode === "original" ? "Pads if needed" : "Center crop"}
+              </span>
+            </label>
+            <div className="flex gap-2">
+              {ASPECT_MODES.map((mode) => (
+                <button
+                  key={mode.id}
+                  onClick={() => setAspectMode(mode.id)}
+                  className={cn(
+                    "flex flex-col items-center gap-1 px-3 py-2 border text-xs font-bold transition-all",
+                    aspectMode === mode.id
+                      ? "bg-[#0A0A0A] text-[#F9F9F7] border-[#0A0A0A] shadow-[2px_2px_0px_0px_#C8FF00]"
+                      : "bg-[#F9F9F7] text-[#0A0A0A] border-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A] opacity-50"
+                  )}
+                >
+                  <span className="text-base leading-none">{mode.icon}</span>
+                  <span>{mode.label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Padding color picker */}
-        {instagramSelected && hasAnyPadding && (
+        {instagramSelected && aspectMode === "original" && hasAnyPadding && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Padding color
@@ -570,7 +637,15 @@ export default function ComposePage() {
               </div>
 
               {/* Image area */}
-              <div className="relative bg-black aspect-square overflow-hidden">
+              <div
+                className="relative bg-black overflow-hidden"
+                style={{
+                  aspectRatio: aspectMode === "square" ? "1/1"
+                    : aspectMode === "portrait" ? "4/5"
+                    : aspectMode === "landscape" ? "1.91/1"
+                    : "1/1",
+                }}
+              >
                 {currentPreview?.file.type.startsWith("video/") ? (
                   <video
                     key={currentPreview.preview}
@@ -583,7 +658,10 @@ export default function ComposePage() {
                   <img
                     src={currentPreview.preview}
                     alt="Preview"
-                    className="w-full h-full object-contain"
+                    className={cn(
+                      "w-full h-full",
+                      aspectMode === "original" ? "object-contain" : "object-cover"
+                    )}
                   />
                 ) : null}
 
@@ -651,8 +729,12 @@ export default function ComposePage() {
               <div className="text-xs text-[#5C5C5A] flex items-center gap-2">
                 <span className="truncate">{currentPreview.file.name}</span>
                 <span className="shrink-0">({(currentPreview.file.size / 1024 / 1024).toFixed(1)} MB)</span>
-                {currentPreview.needsPadding && instagramSelected && !currentPreview.file.type.startsWith("video/") && (
-                  <span className="text-[#FF4F4F] font-bold shrink-0">+pad</span>
+                {instagramSelected && !currentPreview.file.type.startsWith("video/") && (
+                  aspectMode === "original" && currentPreview.needsPadding
+                    ? <span className="text-[#FF4F4F] font-bold shrink-0">+pad</span>
+                    : aspectMode !== "original"
+                    ? <span className="text-[#0095F6] font-bold shrink-0">crop {ASPECT_MODES.find((m) => m.id === aspectMode)?.label}</span>
+                    : null
                 )}
               </div>
             )}
