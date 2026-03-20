@@ -41,7 +41,7 @@ export function PlatformCard({
       if (!user) { window.location.href = "/login"; return; }
 
       const params = new URLSearchParams({
-        client_id: process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID!,
+        client_id: "695113371811-i61qt8hbhs9gn3rd4b6ga99114tcimek.apps.googleusercontent.com",
         redirect_uri: `${window.location.origin}/youtube-callback`,
         response_type: "code",
         scope: [
@@ -61,7 +61,7 @@ export function PlatformCard({
       if (!user) { window.location.href = "/login"; return; }
 
       const params = new URLSearchParams({
-        client_id: process.env.NEXT_PUBLIC_INSTAGRAM_APP_ID!,
+        client_id: "786960820704998",
         redirect_uri: `${window.location.origin}/instagram-callback`,
         response_type: "code",
         scope: "instagram_business_basic,instagram_business_content_publish",
