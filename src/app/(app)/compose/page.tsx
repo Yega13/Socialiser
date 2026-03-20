@@ -396,8 +396,9 @@ export default function ComposePage() {
               break;
             }
 
-            const { data: urlData } = supabase.storage.from("media").getPublicUrl(fileName);
-            uploadedItems.push({ url: urlData.publicUrl, isVideo });
+            const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
+            const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
+            uploadedItems.push({ url: mediaUrl, isVideo });
           }
 
           if (!uploadFailed) {

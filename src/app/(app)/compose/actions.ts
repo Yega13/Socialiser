@@ -70,13 +70,16 @@ async function waitForContainer(
   for (let i = 0; i < 30; i++) {
     await new Promise((r) => setTimeout(r, 2000));
     const res = await fetch(
-      `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
+      `https://graph.instagram.com/v21.0/${containerId}?fields=status_code,status&access_token=${accessToken}`
     );
     const data = await res.json();
     if (data.status_code === "FINISHED") return null;
-    if (data.status_code === "ERROR") return "Media processing failed";
+    if (data.status_code === "ERROR") {
+      return `Media processing failed${data.status ? `: ${data.status}` : ""}`;
+    }
+    if (data.status_code === "EXPIRED") return "Media container expired";
   }
-  return "Media processing timed out";
+  return "Media processing timed out (60s)";
 }
 
 // Single image or video post
@@ -319,10 +322,28 @@ export async function processScheduledPosts(): Promise<{ processed: number }> {
           continue;
         }
         const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
-        const items = (post.media_urls as string[]).map((url: string, i: number) => ({
-          url,
-          isVideo: (post.media_types as string[] | null)?.[i]?.startsWith("video/") ?? false,
-        }));
+
+        // Convert stored public URLs to signed URLs so Instagram can access them
+        const items: { url: string; isVideo: boolean }[] = [];
+        for (let i = 0; i < (post.media_urls as string[]).length; i++) {
+          const publicUrl = (post.media_urls as string[])[i];
+          const isVideo = (post.media_types as string[] | null)?.[i]?.startsWith("video/") ?? false;
+
+          // Extract file path from the public URL
+          const pathMatch = publicUrl.match(/\/storage\/v1\/object\/public\/media\/(.+)$/);
+          if (pathMatch) {
+            const { data: signedData, error: signedErr } = await supabase.storage
+              .from("media")
+              .createSignedUrl(pathMatch[1], 3600); // 1 hour expiry
+            if (signedData?.signedUrl && !signedErr) {
+              items.push({ url: signedData.signedUrl, isVideo });
+            } else {
+              items.push({ url: publicUrl, isVideo }); // fallback to public URL
+            }
+          } else {
+            items.push({ url: publicUrl, isVideo });
+          }
+        }
 
         if (items.length === 1) {
           results[platformId] = await postToInstagramServer(
