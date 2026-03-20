@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
+import { processScheduledPosts } from "@/app/(app)/compose/actions";
 import { cn } from "@/lib/utils";
 
 type ScheduledPost = {
@@ -19,8 +20,9 @@ type ScheduledPost = {
 export default function ScheduledPage() {
   const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState(false);
 
-  async function loadPosts() {
+  const loadPosts = useCallback(async () => {
     const supabase = createClient();
     const { data } = await supabase
       .from("scheduled_posts")
@@ -28,9 +30,37 @@ export default function ScheduledPage() {
       .order("scheduled_at", { ascending: true });
     setPosts(data ?? []);
     setLoading(false);
-  }
+  }, []);
 
-  useEffect(() => { loadPosts(); }, []);
+  // On mount: process any overdue posts, then load
+  useEffect(() => {
+    async function init() {
+      setProcessing(true);
+      try {
+        const { processed } = await processScheduledPosts();
+        if (processed > 0) {
+          // Reload to show updated statuses
+          await loadPosts();
+        }
+      } catch {
+        // Processing failed silently — still load posts
+      }
+      setProcessing(false);
+      await loadPosts();
+    }
+    init();
+  }, [loadPosts]);
+
+  async function handleProcessNow() {
+    setProcessing(true);
+    try {
+      await processScheduledPosts();
+    } catch {
+      // ignore
+    }
+    await loadPosts();
+    setProcessing(false);
+  }
 
   async function cancelPost(id: string) {
     const supabase = createClient();
@@ -39,20 +69,37 @@ export default function ScheduledPage() {
   }
 
   const pending = posts.filter((p) => p.status === "pending");
+  const processingPosts = posts.filter((p) => p.status === "processing");
   const completed = posts.filter((p) => p.status === "completed");
   const failed = posts.filter((p) => p.status === "failed");
+  const hasOverdue = pending.some((p) => new Date(p.scheduled_at) <= new Date());
 
   return (
     <div className="max-w-2xl space-y-6">
       <div>
-        <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">Scheduled Posts</h1>
-        <p className="text-[#5C5C5A] mt-1 text-sm">Manage your upcoming and past scheduled posts.</p>
+        <a href="/dashboard" className="inline-flex items-center gap-1 text-sm font-bold text-[#5C5C5A] hover:text-[#0A0A0A] transition-colors mb-2">
+          ← Dashboard
+        </a>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">Scheduled Posts</h1>
+            <p className="text-[#5C5C5A] mt-1 text-sm">Manage your upcoming and past scheduled posts.</p>
+          </div>
+          {hasOverdue && !processing && (
+            <button
+              onClick={handleProcessNow}
+              className="bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all shrink-0"
+            >
+              Post now
+            </button>
+          )}
+        </div>
       </div>
 
-      {loading ? (
+      {loading || processing ? (
         <div className="flex items-center gap-2 text-sm text-[#5C5C5A]">
           <div className="w-4 h-4 border-2 border-[#0A0A0A] border-t-transparent animate-spin" />
-          Loading...
+          {processing ? "Processing overdue posts..." : "Loading..."}
         </div>
       ) : posts.length === 0 ? (
         <div className="border border-[#0A0A0A] p-6 shadow-[4px_4px_0px_0px_#0A0A0A] text-center">
@@ -66,6 +113,18 @@ export default function ScheduledPage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {/* Processing */}
+          {processingPosts.length > 0 && (
+            <div>
+              <div className="font-bold text-sm text-[#00D4FF] mb-3">Processing ({processingPosts.length})</div>
+              <div className="space-y-3">
+                {processingPosts.map((post) => (
+                  <PostCard key={post.id} post={post} />
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Pending */}
           {pending.length > 0 && (
             <div>
@@ -117,7 +176,8 @@ function PostCard({ post, onCancel }: { post: ScheduledPost; onCancel?: () => vo
         "border border-[#0A0A0A] p-4 shadow-[4px_4px_0px_0px_#0A0A0A]",
         post.status === "completed" && "border-green-600 shadow-[4px_4px_0px_0px_#16a34a]",
         post.status === "failed" && "border-[#FF4F4F] shadow-[4px_4px_0px_0px_#FF4F4F]",
-        post.status === "pending" && "border-[#7C3AED] shadow-[4px_4px_0px_0px_#7C3AED]"
+        post.status === "pending" && "border-[#7C3AED] shadow-[4px_4px_0px_0px_#7C3AED]",
+        post.status === "processing" && "border-[#00D4FF] shadow-[4px_4px_0px_0px_#00D4FF]"
       )}
     >
       <div className="flex items-start justify-between gap-3">
@@ -162,7 +222,7 @@ function PostCard({ post, onCancel }: { post: ScheduledPost; onCancel?: () => vo
               post.status === "failed" && "bg-[#FF4F4F] text-white"
             )}
           >
-            {post.status === "pending" && isPast ? "WAITING" : post.status.toUpperCase()}
+            {post.status === "pending" && isPast ? "OVERDUE" : post.status.toUpperCase()}
           </span>
           {onCancel && post.status !== "completed" && (
             <button

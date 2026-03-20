@@ -546,6 +546,9 @@ export default function ComposePage() {
       {/* Left — form */}
       <div className="flex-1 min-w-0 space-y-6">
         <div>
+          <a href="/dashboard" className="inline-flex items-center gap-1 text-sm font-bold text-[#5C5C5A] hover:text-[#0A0A0A] transition-colors mb-2">
+            ← Dashboard
+          </a>
           <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">
             New Post
           </h1>

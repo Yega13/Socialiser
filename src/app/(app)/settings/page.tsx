@@ -41,6 +41,9 @@ export default async function SettingsPage() {
   return (
     <div className="space-y-6 w-full max-w-2xl">
       <div>
+        <a href="/dashboard" className="inline-flex items-center gap-1 text-sm font-bold text-[#5C5C5A] hover:text-[#0A0A0A] transition-colors mb-2">
+          ← Dashboard
+        </a>
         <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">Settings</h1>
         <p className="text-[#5C5C5A] mt-1 text-sm sm:text-base">Manage your profile and preferences.</p>
       </div>
