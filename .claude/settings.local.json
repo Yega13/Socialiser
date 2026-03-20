@@ -27,7 +27,8 @@
       "Bash(nvm list:*)",
       "Bash(fnm list:*)",
       "WebFetch(domain:gist.github.com)",
-      "Bash(find /c/Users/yegan/OneDrive/Desktop/Socialiser -name *youtube* -o -name *callback*)"
+      "Bash(find /c/Users/yegan/OneDrive/Desktop/Socialiser -name *youtube* -o -name *callback*)",
+      "WebFetch(domain:jpqznnqhxuogzoshbbyz.supabase.co)"
     ]
   }
 }
