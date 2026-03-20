@@ -62,14 +62,19 @@ export async function postToInstagramServer(
         body: new URLSearchParams(containerParams),
       }
     );
-    const containerData = await containerRes.json();
+    const containerText = await containerRes.text();
+    let containerData;
+    try {
+      containerData = JSON.parse(containerText);
+    } catch {
+      return { success: false, error: `API returned non-JSON (${containerRes.status}): ${containerText.slice(0, 200)}` };
+    }
 
     if (!containerData.id) {
-      return {
-        success: false,
-        error: containerData.error?.message
-          ?? `Container failed (${containerRes.status}): ${JSON.stringify(containerData)}`,
-      };
+      const errDetail = containerData.error
+        ? `[${containerData.error.code}] ${containerData.error.type}: ${containerData.error.message} (fbtrace: ${containerData.error.fbtrace_id})`
+        : JSON.stringify(containerData);
+      return { success: false, error: `Container failed (${containerRes.status}): ${errDetail}` };
     }
 
     const containerId = containerData.id;
