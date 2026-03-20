@@ -24,6 +24,12 @@ type MediaItem = {
   cropOffset: { x: number; y: number };
 };
 
+type FilterSettings = {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+};
+
 const ASPECT_MODES = [
   { id: "original", label: "Original", ratio: null, icon: "↔" },
   { id: "square", label: "1:1", ratio: 1, icon: "□" },
@@ -44,7 +50,8 @@ async function postToYouTube(
   accessToken: string,
   title: string,
   description: string,
-  videoFile: File
+  videoFile: File,
+  thumbnailBlob?: Blob | null,
 ): Promise<{ success: boolean; error?: string }> {
   const metadata = {
     snippet: { title: title || "New Video", description: description || "", categoryId: "22" },
@@ -62,6 +69,25 @@ async function postToYouTube(
     const err = await res.json().catch(() => ({}));
     return { success: false, error: err?.error?.message ?? `YouTube error ${res.status}` };
   }
+
+  const data = await res.json();
+  const videoId = data.id;
+
+  // Set custom thumbnail if provided
+  if (thumbnailBlob && videoId) {
+    const thumbRes = await fetch(
+      `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${videoId}&uploadType=media`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "image/jpeg" },
+        body: thumbnailBlob,
+      }
+    );
+    if (!thumbRes.ok) {
+      return { success: true, error: "Video uploaded but custom thumbnail failed (channel may need verification)" };
+    }
+  }
+
   return { success: true };
 }
 
@@ -71,6 +97,7 @@ async function prepareImageForInstagram(
   quality = 0.92,
   targetRatio: number | null = null,
   offset: { x: number; y: number } = { x: 0.5, y: 0.5 },
+  imageFilters: FilterSettings = { brightness: 100, contrast: 100, saturation: 100 },
 ): Promise<{ blob: Blob; name: string }> {
   const img = new Image();
   const blobUrl = URL.createObjectURL(file);
@@ -124,8 +151,20 @@ async function prepareImageForInstagram(
     ctx.drawImage(img, drawX, drawY);
   }
 
+  // Apply filters if any are non-default
+  const hasFilters = imageFilters.brightness !== 100 || imageFilters.contrast !== 100 || imageFilters.saturation !== 100;
+  let finalCanvas = canvas;
+  if (hasFilters) {
+    finalCanvas = document.createElement("canvas");
+    finalCanvas.width = canvas.width;
+    finalCanvas.height = canvas.height;
+    const fCtx = finalCanvas.getContext("2d")!;
+    fCtx.filter = `brightness(${imageFilters.brightness}%) contrast(${imageFilters.contrast}%) saturate(${imageFilters.saturation}%)`;
+    fCtx.drawImage(canvas, 0, 0);
+  }
+
   const blob = await new Promise<Blob>((resolve) =>
-    canvas.toBlob((b) => resolve(b!), "image/jpeg", quality)
+    finalCanvas.toBlob((b) => resolve(b!), "image/jpeg", quality)
   );
   return { blob, name: file.name.replace(/\.[^.]+$/, ".jpg") };
 }
@@ -139,6 +178,8 @@ export default function ComposePage() {
   const [padColor, setPadColor] = useState("#FFFFFF");
   const [aspectMode, setAspectMode] = useState<AspectMode>("original");
   const [imageQuality, setImageQuality] = useState(92);
+  const [filters, setFilters] = useState<FilterSettings>({ brightness: 100, contrast: 100, saturation: 100 });
+  const [scheduleDate, setScheduleDate] = useState("");
   const [isPosting, setIsPosting] = useState(false);
   const [postingStatus, setPostingStatus] = useState("");
   const [results, setResults] = useState<Record<
@@ -147,8 +188,13 @@ export default function ComposePage() {
   > | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+  const [thumbnailBlob, setThumbnailBlob] = useState<Blob | null>(null);
+  const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
+  const [videoDuration, setVideoDuration] = useState(0);
+  const [videoTime, setVideoTime] = useState(0);
   const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
   const router = useRouter();
 
   const currentPreview = mediaItems[previewIndex] ?? null;
@@ -173,6 +219,23 @@ export default function ComposePage() {
     if (!item) return;
     dragStart.current = { x: clientX, y: clientY, ox: item.cropOffset.x, oy: item.cropOffset.y };
     setIsDragging(true);
+  }
+
+  function captureVideoFrame() {
+    const video = videoRef.current;
+    if (!video) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext("2d")!;
+    ctx.drawImage(video, 0, 0);
+    canvas.toBlob((blob) => {
+      if (blob) {
+        if (thumbnailPreview) URL.revokeObjectURL(thumbnailPreview);
+        setThumbnailBlob(blob);
+        setThumbnailPreview(URL.createObjectURL(blob));
+      }
+    }, "image/jpeg", 0.95);
   }
 
   useEffect(() => {
@@ -290,7 +353,7 @@ export default function ComposePage() {
           postResults[platformId] = { success: false, error: "YouTube requires a video file" };
         } else {
           setPostingStatus("Uploading to YouTube...");
-          postResults[platformId] = await postToYouTube(accessToken, title, description, videoItem.file);
+          postResults[platformId] = await postToYouTube(accessToken, title, description, videoItem.file, thumbnailBlob);
         }
       }
 
@@ -315,7 +378,7 @@ export default function ComposePage() {
 
             if (!isVideo) {
               const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset);
+              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
               fileToUpload = prepared.blob;
               uploadName = prepared.name;
             }
@@ -365,6 +428,94 @@ export default function ComposePage() {
 
     setPostingStatus("");
     setResults(postResults);
+    setIsPosting(false);
+  }
+
+  async function handleSchedule() {
+    if (!title.trim() || selected.length === 0 || !scheduleDate) return;
+    setIsPosting(true);
+    setPostingStatus("Preparing scheduled post...");
+
+    const supabase = createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) { setIsPosting(false); return; }
+
+    // Upload all media to storage (pre-process images)
+    const mediaUrls: string[] = [];
+    const mediaTypes: string[] = [];
+    const cropOffsets: { x: number; y: number }[] = [];
+
+    for (let i = 0; i < mediaItems.length; i++) {
+      const item = mediaItems[i];
+      const isVideo = item.file.type.startsWith("video/");
+      setPostingStatus(`Preparing file ${i + 1}/${mediaItems.length}...`);
+
+      let fileToUpload: File | Blob = item.file;
+      let uploadName = item.file.name;
+      let contentType = item.file.type;
+
+      if (!isVideo && instagramSelected) {
+        const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+        const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
+        fileToUpload = prepared.blob;
+        uploadName = prepared.name;
+        contentType = "image/jpeg";
+      }
+
+      const fileName = `scheduled/${Date.now()}-${i}-${uploadName}`;
+      const { error } = await supabase.storage
+        .from("media")
+        .upload(fileName, fileToUpload, { upsert: true, contentType });
+
+      if (error) {
+        setResults({ schedule: { success: false, error: `Upload failed: ${error.message}` } });
+        setIsPosting(false);
+        setPostingStatus("");
+        return;
+      }
+
+      const { data: urlData } = supabase.storage.from("media").getPublicUrl(fileName);
+      mediaUrls.push(urlData.publicUrl);
+      mediaTypes.push(contentType);
+      cropOffsets.push(item.cropOffset);
+    }
+
+    // Upload thumbnail if set
+    let thumbUrl: string | undefined;
+    if (thumbnailBlob) {
+      const thumbName = `scheduled/${Date.now()}-thumbnail.jpg`;
+      const { error } = await supabase.storage
+        .from("media")
+        .upload(thumbName, thumbnailBlob, { upsert: true, contentType: "image/jpeg" });
+      if (!error) {
+        thumbUrl = supabase.storage.from("media").getPublicUrl(thumbName).data.publicUrl;
+      }
+    }
+
+    setPostingStatus("Saving schedule...");
+    const { error: insertErr } = await supabase.from("scheduled_posts").insert({
+      user_id: user.id,
+      title,
+      description: description || null,
+      platforms: selected,
+      scheduled_at: new Date(scheduleDate).toISOString(),
+      media_urls: mediaUrls.length > 0 ? mediaUrls : null,
+      media_types: mediaTypes.length > 0 ? mediaTypes : null,
+      aspect_mode: aspectMode,
+      pad_color: padColor,
+      image_quality: imageQuality,
+      crop_offsets: cropOffsets,
+      thumbnail_url: thumbUrl ?? null,
+      filter_settings: filters,
+    });
+
+    if (insertErr) {
+      setResults({ schedule: { success: false, error: insertErr.message } });
+    } else {
+      setResults({ schedule: { success: true } });
+    }
+
+    setPostingStatus("");
     setIsPosting(false);
   }
 
@@ -616,6 +767,47 @@ export default function ComposePage() {
           </div>
         )}
 
+        {/* Image filters */}
+        {instagramSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="font-bold text-sm text-[#0A0A0A]">
+                Filters
+              </label>
+              {(filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100) && (
+                <button
+                  onClick={() => setFilters({ brightness: 100, contrast: 100, saturation: 100 })}
+                  className="text-xs text-[#0095F6] font-bold hover:underline"
+                >
+                  Reset
+                </button>
+              )}
+            </div>
+            <div className="space-y-3">
+              {([
+                { key: "brightness" as const, label: "Brightness" },
+                { key: "contrast" as const, label: "Contrast" },
+                { key: "saturation" as const, label: "Saturation" },
+              ]).map(({ key, label }) => (
+                <div key={key}>
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-[#5C5C5A]">{label}</span>
+                    <span className="text-xs font-bold text-[#0A0A0A] w-10 text-right">{filters[key]}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0}
+                    max={200}
+                    value={filters[key]}
+                    onChange={(e) => setFilters((f) => ({ ...f, [key]: Number(e.target.value) }))}
+                    className="w-full accent-[#0A0A0A] h-2 cursor-pointer"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Results */}
         {results && (
           <div className="border border-[#0A0A0A] p-4 shadow-[4px_4px_0px_0px_#0A0A0A]">
@@ -625,7 +817,9 @@ export default function ComposePage() {
                 <span className={result.success ? "text-green-600 font-bold" : "text-[#FF4F4F] font-bold"}>
                   {result.success ? "\u2713" : "\u2717"}
                 </span>
-                <span className="font-medium capitalize">{platform}</span>
+                <span className="font-medium capitalize">
+                  {platform === "schedule" ? (result.success ? "Scheduled successfully" : "Scheduling failed") : platform}
+                </span>
                 {result.error && <span className="text-[#5C5C5A]">&mdash; {result.error}</span>}
               </div>
             ))}
@@ -638,19 +832,50 @@ export default function ComposePage() {
           </div>
         )}
 
-        {/* Post button */}
+        {/* Schedule & Post */}
         {!results && (
-          <div className="space-y-2">
+          <div className="space-y-3">
+            {/* Schedule picker */}
+            <div>
+              <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+                Schedule
+                <span className="font-normal text-[#5C5C5A] ml-2">
+                  {scheduleDate ? "Will post at scheduled time" : "Leave empty to post now"}
+                </span>
+              </label>
+              <input
+                type="datetime-local"
+                value={scheduleDate}
+                onChange={(e) => setScheduleDate(e.target.value)}
+                min={new Date(Date.now() + 60000).toISOString().slice(0, 16)}
+                className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
+              />
+              {scheduleDate && (
+                <button
+                  onClick={() => setScheduleDate("")}
+                  className="text-xs text-[#0095F6] font-bold mt-1 hover:underline"
+                >
+                  Clear schedule (post now instead)
+                </button>
+              )}
+            </div>
+
+            {/* Action buttons */}
             <button
-              onClick={handlePost}
+              onClick={scheduleDate ? handleSchedule : handlePost}
               disabled={!canPost}
-              className="w-full bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-6 py-3 font-bold text-[#0A0A0A] disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:translate-x-[2px] hover:enabled:translate-y-[2px] hover:enabled:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all flex items-center justify-center gap-3"
+              className={cn(
+                "w-full border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-6 py-3 font-bold disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:translate-x-[2px] hover:enabled:translate-y-[2px] hover:enabled:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all flex items-center justify-center gap-3",
+                scheduleDate ? "bg-[#7C3AED] text-[#F9F9F7]" : "bg-[#C8FF00] text-[#0A0A0A]"
+              )}
             >
               {isPosting && (
-                <div className="w-5 h-5 border-2 border-[#0A0A0A] border-t-transparent animate-spin" />
+                <div className={cn("w-5 h-5 border-2 border-t-transparent animate-spin", scheduleDate ? "border-[#F9F9F7]" : "border-[#0A0A0A]")} />
               )}
               {isPosting
-                ? "Uploading..."
+                ? scheduleDate ? "Scheduling..." : "Uploading..."
+                : scheduleDate
+                ? `Schedule for ${new Date(scheduleDate).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
                 : mediaItems.length > 1 && instagramSelected
                 ? `Post carousel to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`
                 : `Post to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`}
@@ -701,10 +926,13 @@ export default function ComposePage() {
               >
                 {currentPreview?.file.type.startsWith("video/") ? (
                   <video
+                    ref={videoRef}
                     key={currentPreview.preview}
                     src={currentPreview.preview}
                     controls
                     className="w-full h-full object-contain"
+                    onLoadedMetadata={(e) => setVideoDuration((e.target as HTMLVideoElement).duration)}
+                    onTimeUpdate={(e) => setVideoTime((e.target as HTMLVideoElement).currentTime)}
                   />
                 ) : currentPreview ? (
                   // eslint-disable-next-line @next/next/no-img-element
@@ -716,9 +944,12 @@ export default function ComposePage() {
                       "w-full h-full pointer-events-none",
                       aspectMode === "original" ? "object-contain" : "object-cover"
                     )}
-                    style={aspectMode !== "original" ? {
-                      objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%`,
-                    } : undefined}
+                    style={{
+                      ...(aspectMode !== "original" ? {
+                        objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%`,
+                      } : {}),
+                      filter: `brightness(${filters.brightness}%) contrast(${filters.contrast}%) saturate(${filters.saturation}%)`,
+                    }}
                   />
                 ) : null}
 
@@ -794,6 +1025,57 @@ export default function ComposePage() {
                   >
                     Reset
                   </button>
+                )}
+              </div>
+            )}
+
+            {/* YouTube thumbnail picker */}
+            {youtubeSelected && currentPreview && currentPreview.file.type.startsWith("video/") && videoDuration > 0 && (
+              <div className="border border-[#0A0A0A] p-3 shadow-[2px_2px_0px_0px_#0A0A0A] space-y-2">
+                <div className="font-bold text-xs text-[#0A0A0A]">YouTube Thumbnail</div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-[#5C5C5A] shrink-0 w-8">
+                    {Math.floor(videoTime / 60)}:{String(Math.floor(videoTime % 60)).padStart(2, "0")}
+                  </span>
+                  <input
+                    type="range"
+                    min={0}
+                    max={videoDuration}
+                    step={0.1}
+                    value={videoTime}
+                    onChange={(e) => {
+                      const t = Number(e.target.value);
+                      setVideoTime(t);
+                      if (videoRef.current) videoRef.current.currentTime = t;
+                    }}
+                    className="flex-1 accent-[#FF0000] h-1.5 cursor-pointer"
+                  />
+                  <span className="text-[10px] text-[#5C5C5A] shrink-0 w-8 text-right">
+                    {Math.floor(videoDuration / 60)}:{String(Math.floor(videoDuration % 60)).padStart(2, "0")}
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    onClick={captureVideoFrame}
+                    className="flex-1 bg-[#FF0000] text-white border border-[#0A0A0A] px-2 py-1.5 text-xs font-bold shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_#0A0A0A] transition-all"
+                  >
+                    Capture frame
+                  </button>
+                  {thumbnailBlob && (
+                    <button
+                      onClick={() => { setThumbnailBlob(null); if (thumbnailPreview) URL.revokeObjectURL(thumbnailPreview); setThumbnailPreview(null); }}
+                      className="px-2 py-1.5 border border-[#0A0A0A] text-xs font-bold text-[#FF4F4F] shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_#0A0A0A] transition-all"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                {thumbnailPreview && (
+                  <div className="mt-1">
+                    <div className="text-[10px] text-[#5C5C5A] mb-1">Thumbnail preview:</div>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={thumbnailPreview} alt="Thumbnail" className="w-full border border-[#0A0A0A]" />
+                  </div>
                 )}
               </div>
             )}

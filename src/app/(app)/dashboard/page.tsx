@@ -35,12 +35,20 @@ export default async function DashboardPage() {
           </p>
         </div>
         {connectedCount > 0 && (
-          <Link
-            href="/compose"
-            className="bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
-          >
-            + New Post
-          </Link>
+          <div className="flex gap-2">
+            <Link
+              href="/scheduled"
+              className="bg-[#7C3AED] text-[#F9F9F7] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
+            >
+              Scheduled
+            </Link>
+            <Link
+              href="/compose"
+              className="bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
+            >
+              + New Post
+            </Link>
+          </div>
         )}
       </div>
 

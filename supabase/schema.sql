@@ -47,6 +47,30 @@ create policy "Auth upload" on storage.objects for insert with check (
 create policy "Auth update" on storage.objects for update using (
   bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
 
+-- Scheduled posts
+create table public.scheduled_posts (
+  id uuid default gen_random_uuid() primary key,
+  user_id uuid references auth.users(id) on delete cascade not null,
+  title text not null,
+  description text,
+  platforms text[] not null,
+  scheduled_at timestamptz not null,
+  status text default 'pending' check (status in ('pending', 'processing', 'completed', 'failed')),
+  results jsonb,
+  media_urls text[],
+  media_types text[],
+  aspect_mode text default 'original',
+  pad_color text default '#FFFFFF',
+  image_quality integer default 92,
+  crop_offsets jsonb,
+  thumbnail_url text,
+  filter_settings jsonb,
+  created_at timestamptz default now()
+);
+alter table public.scheduled_posts enable row level security;
+create policy "Owner all" on public.scheduled_posts for all using (auth.uid() = user_id);
+create index idx_scheduled_pending on public.scheduled_posts (scheduled_at) where status = 'pending';
+
 -- Storage policies for media bucket (Instagram uploads)
 create policy "Public read media" on storage.objects for select using (bucket_id = 'media');
 create policy "Auth upload media" on storage.objects for insert with check (
