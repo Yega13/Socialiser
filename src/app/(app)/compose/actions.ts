@@ -33,3 +33,79 @@ export async function refreshInstagramToken(
   }
   return null;
 }
+
+export async function postToInstagramServer(
+  accessToken: string,
+  igUserId: string,
+  caption: string,
+  mediaUrl: string,
+  isVideo: boolean
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    // Step 1: Create media container
+    const containerBody: Record<string, string> = { caption };
+    if (isVideo) {
+      containerBody.media_type = "REELS";
+      containerBody.video_url = mediaUrl;
+    } else {
+      containerBody.image_url = mediaUrl;
+    }
+
+    const containerRes = await fetch(
+      `https://graph.instagram.com/v21.0/${igUserId}/media`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify(containerBody),
+      }
+    );
+    const containerData = await containerRes.json();
+
+    if (!containerData.id) {
+      return { success: false, error: containerData.error?.message ?? `Container failed: ${JSON.stringify(containerData)}` };
+    }
+
+    const containerId = containerData.id;
+
+    // Step 2: For videos, poll until container is ready
+    if (isVideo) {
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const statusRes = await fetch(
+          `https://graph.instagram.com/v21.0/${containerId}?fields=status_code`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        );
+        const statusData = await statusRes.json();
+        if (statusData.status_code === "FINISHED") break;
+        if (statusData.status_code === "ERROR") {
+          return { success: false, error: "Instagram video processing failed" };
+        }
+      }
+    }
+
+    // Step 3: Publish
+    const publishRes = await fetch(
+      `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ creation_id: containerId }),
+      }
+    );
+    const publishData = await publishRes.json();
+
+    if (!publishData.id) {
+      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}

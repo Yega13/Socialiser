@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, postToInstagramServer } from "./actions";
 
 type ConnectedPlatform = {
   id: string;
@@ -225,7 +225,7 @@ export default function ComposePage() {
             const publicUrl = urlData.publicUrl;
 
             setPostingStatus(isVideo ? "Publishing reel (this may take a minute)..." : "Publishing to Instagram...");
-            postResults[platformId] = await postToInstagram(
+            postResults[platformId] = await postToInstagramServer(
               accessToken,
               conn.platform_user_id,
               `${title}${description ? "\n\n" + description : ""}`,
