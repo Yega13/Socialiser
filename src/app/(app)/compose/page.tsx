@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
@@ -21,6 +21,7 @@ type MediaItem = {
   file: File;
   preview: string;
   needsPadding: boolean;
+  cropOffset: { x: number; y: number };
 };
 
 const ASPECT_MODES = [
@@ -69,6 +70,7 @@ async function prepareImageForInstagram(
   padColor: string,
   quality = 0.92,
   targetRatio: number | null = null,
+  offset: { x: number; y: number } = { x: 0.5, y: 0.5 },
 ): Promise<{ blob: Blob; name: string }> {
   const img = new Image();
   const blobUrl = URL.createObjectURL(file);
@@ -80,16 +82,16 @@ async function prepareImageForInstagram(
   const canvas = document.createElement("canvas");
 
   if (targetRatio !== null) {
-    // Crop mode: center-crop to target ratio
+    // Crop mode: crop to target ratio using user-defined offset
     let srcX = 0, srcY = 0, srcW = width, srcH = height;
     if (ratio > targetRatio) {
-      // Image is wider — crop sides
+      // Image is wider — crop sides, offset.x controls horizontal position
       srcW = Math.round(height * targetRatio);
-      srcX = Math.round((width - srcW) / 2);
+      srcX = Math.round((width - srcW) * offset.x);
     } else if (ratio < targetRatio) {
-      // Image is taller — crop top/bottom
+      // Image is taller — crop top/bottom, offset.y controls vertical position
       srcH = Math.round(width / targetRatio);
-      srcY = Math.round((height - srcH) / 2);
+      srcY = Math.round((height - srcH) * offset.y);
     }
     canvas.width = srcW;
     canvas.height = srcH;
@@ -144,7 +146,53 @@ export default function ComposePage() {
     { success: boolean; error?: string }
   > | null>(null);
   const [previewIndex, setPreviewIndex] = useState(0);
+  const [isDragging, setIsDragging] = useState(false);
+  const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
+  const previewRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
+
+  const currentPreview = mediaItems[previewIndex] ?? null;
+  const currentPreviewIsImage = currentPreview !== null && currentPreview.file.type.startsWith("image/");
+  const canDrag = aspectMode !== "original" && currentPreviewIsImage;
+
+  const updateCropOffset = useCallback((clientX: number, clientY: number) => {
+    if (!dragStart.current || !previewRef.current) return;
+    const rect = previewRef.current.getBoundingClientRect();
+    const dx = (clientX - dragStart.current.x) / rect.width;
+    const dy = (clientY - dragStart.current.y) / rect.height;
+    const newX = Math.max(0, Math.min(1, dragStart.current.ox - dx));
+    const newY = Math.max(0, Math.min(1, dragStart.current.oy - dy));
+    setMediaItems((prev) => prev.map((item, i) =>
+      i === previewIndex ? { ...item, cropOffset: { x: newX, y: newY } } : item
+    ));
+  }, [previewIndex]);
+
+  function handleDragStart(clientX: number, clientY: number) {
+    if (!canDrag) return;
+    const item = mediaItems[previewIndex];
+    if (!item) return;
+    dragStart.current = { x: clientX, y: clientY, ox: item.cropOffset.x, oy: item.cropOffset.y };
+    setIsDragging(true);
+  }
+
+  useEffect(() => {
+    if (!isDragging) return;
+    function onMove(e: MouseEvent | TouchEvent) {
+      const p = "touches" in e ? e.touches[0] : e;
+      updateCropOffset(p.clientX, p.clientY);
+    }
+    function onUp() { setIsDragging(false); dragStart.current = null; }
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: true });
+    window.addEventListener("touchend", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+    };
+  }, [isDragging, updateCropOffset]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -181,7 +229,7 @@ export default function ComposePage() {
         needsPadding = ratio < 4 / 5 || ratio > 1.91;
       }
 
-      newItems.push({ file, preview, needsPadding });
+      newItems.push({ file, preview, needsPadding, cropOffset: { x: 0.5, y: 0.5 } });
     }
 
     setMediaItems(newItems);
@@ -267,7 +315,7 @@ export default function ComposePage() {
 
             if (!isVideo) {
               const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio);
+              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset);
               fileToUpload = prepared.blob;
               uploadName = prepared.name;
             }
@@ -341,8 +389,6 @@ export default function ComposePage() {
   const acceptTypes = youtubeSelected && !instagramSelected
     ? "video/*"
     : "image/*,video/*";
-
-  const currentPreview = mediaItems[previewIndex] ?? null;
 
   return (
     <div className="flex gap-8 max-w-4xl">
@@ -487,7 +533,7 @@ export default function ComposePage() {
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Crop mode
               <span className="font-normal text-[#5C5C5A] ml-2">
-                {aspectMode === "original" ? "Pads if needed" : "Center crop"}
+                {aspectMode === "original" ? "Pads if needed" : "Drag preview to adjust"}
               </span>
             </label>
             <div className="flex gap-2">
@@ -638,13 +684,20 @@ export default function ComposePage() {
 
               {/* Image area */}
               <div
-                className="relative bg-black overflow-hidden"
+                ref={previewRef}
+                className={cn(
+                  "relative bg-black overflow-hidden select-none",
+                  canDrag && "cursor-grab",
+                  canDrag && isDragging && "cursor-grabbing"
+                )}
                 style={{
                   aspectRatio: aspectMode === "square" ? "1/1"
                     : aspectMode === "portrait" ? "4/5"
                     : aspectMode === "landscape" ? "1.91/1"
                     : "1/1",
                 }}
+                onMouseDown={(e) => { e.preventDefault(); handleDragStart(e.clientX, e.clientY); }}
+                onTouchStart={(e) => handleDragStart(e.touches[0].clientX, e.touches[0].clientY)}
               >
                 {currentPreview?.file.type.startsWith("video/") ? (
                   <video
@@ -658,10 +711,14 @@ export default function ComposePage() {
                   <img
                     src={currentPreview.preview}
                     alt="Preview"
+                    draggable={false}
                     className={cn(
-                      "w-full h-full",
+                      "w-full h-full pointer-events-none",
                       aspectMode === "original" ? "object-contain" : "object-cover"
                     )}
+                    style={aspectMode !== "original" ? {
+                      objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%`,
+                    } : undefined}
                   />
                 ) : null}
 
@@ -723,6 +780,23 @@ export default function ComposePage() {
                 </p>
               </div>
             </div>
+
+            {/* Drag hint */}
+            {canDrag && currentPreviewIsImage && (
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-[#5C5C5A]">Drag image to reposition</span>
+                {(currentPreview!.cropOffset.x !== 0.5 || currentPreview!.cropOffset.y !== 0.5) && (
+                  <button
+                    onClick={() => setMediaItems((prev) => prev.map((item, i) =>
+                      i === previewIndex ? { ...item, cropOffset: { x: 0.5, y: 0.5 } } : item
+                    ))}
+                    className="text-[10px] text-[#0095F6] font-bold hover:underline"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* File info */}
             {currentPreview && (
