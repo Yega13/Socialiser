@@ -28,7 +28,11 @@
       "Bash(fnm list:*)",
       "WebFetch(domain:gist.github.com)",
       "Bash(find /c/Users/yegan/OneDrive/Desktop/Socialiser -name *youtube* -o -name *callback*)",
-      "WebFetch(domain:jpqznnqhxuogzoshbbyz.supabase.co)"
+      "WebFetch(domain:jpqznnqhxuogzoshbbyz.supabase.co)",
+      "Bash(npx tsc:*)",
+      "Bash(node_modules/.bin/tsc --noEmit --pretty)",
+      "Bash(where node:*)",
+      "Bash(\"/c/Program Files/nodejs/node.exe\" \"C:/Users/yegan/OneDrive/Desktop/Socialiser/node_modules/.bin/tsc\" --noEmit)"
     ]
   }
 }
