@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
@@ -16,6 +16,13 @@ type ConnectedPlatform = {
   refresh_token: string | null;
   token_expires_at: string | null;
 };
+
+const PAD_COLORS = [
+  { label: "White", value: "#FFFFFF" },
+  { label: "Black", value: "#000000" },
+  { label: "Lime", value: "#C8FF00" },
+  { label: "Violet", value: "#7C3AED" },
+];
 
 async function postToYouTube(
   accessToken: string,
@@ -48,6 +55,9 @@ export default function ComposePage() {
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [mediaFile, setMediaFile] = useState<File | null>(null);
+  const [mediaPreview, setMediaPreview] = useState<string | null>(null);
+  const [padColor, setPadColor] = useState("#FFFFFF");
+  const [needsPadding, setNeedsPadding] = useState(false);
   const [isPosting, setIsPosting] = useState(false);
   const [postingStatus, setPostingStatus] = useState("");
   const [results, setResults] = useState<Record<
@@ -55,6 +65,7 @@ export default function ComposePage() {
     { success: boolean; error?: string }
   > | null>(null);
   const router = useRouter();
+  const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -69,6 +80,31 @@ export default function ComposePage() {
         }
       });
   }, []);
+
+  function handleFileChange(file: File | null) {
+    setMediaFile(file);
+    if (mediaPreview) URL.revokeObjectURL(mediaPreview);
+
+    if (!file) {
+      setMediaPreview(null);
+      setNeedsPadding(false);
+      return;
+    }
+
+    const url = URL.createObjectURL(file);
+    setMediaPreview(url);
+
+    if (file.type.startsWith("image/")) {
+      const img = new Image();
+      img.onload = () => {
+        const ratio = img.width / img.height;
+        setNeedsPadding(ratio < 4 / 5 || ratio > 1.91);
+      };
+      img.src = url;
+    } else {
+      setNeedsPadding(false);
+    }
+  }
 
   async function handlePost() {
     if (!title.trim() || selected.length === 0) return;
@@ -138,23 +174,20 @@ export default function ComposePage() {
             await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
             URL.revokeObjectURL(blobUrl);
 
-            let { width, height } = img;
+            const { width, height } = img;
             const ratio = width / height;
-            const minRatio = 4 / 5;   // 0.8 — tallest allowed (portrait)
-            const maxRatio = 1.91;     // widest allowed (landscape)
+            const minRatio = 4 / 5;
+            const maxRatio = 1.91;
 
-            // Crop to fit Instagram's aspect ratio by adding padding (letterbox)
             const canvas = document.createElement("canvas");
             let drawX = 0, drawY = 0;
 
             if (ratio < minRatio) {
-              // Too tall — add horizontal padding
               const newWidth = Math.ceil(height * minRatio);
               canvas.width = newWidth;
               canvas.height = height;
               drawX = Math.floor((newWidth - width) / 2);
             } else if (ratio > maxRatio) {
-              // Too wide — add vertical padding
               const newHeight = Math.ceil(width / maxRatio);
               canvas.width = width;
               canvas.height = newHeight;
@@ -165,7 +198,7 @@ export default function ComposePage() {
             }
 
             const ctx = canvas.getContext("2d")!;
-            ctx.fillStyle = "#FFFFFF";
+            ctx.fillStyle = padColor;
             ctx.fillRect(0, 0, canvas.width, canvas.height);
             ctx.drawImage(img, drawX, drawY);
 
@@ -226,158 +259,231 @@ export default function ComposePage() {
     : "image/*,video/*";
 
   return (
-    <div className="max-w-2xl space-y-6">
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">
-          New Post
-        </h1>
-        <p className="text-[#5C5C5A] mt-1 text-sm">
-          Post to all your connected platforms at once.
-        </p>
-      </div>
-
-      {/* Platform selector */}
-      <div>
-        <div className="font-bold text-sm text-[#0A0A0A] mb-3">Post to</div>
-        {connected.length === 0 ? (
-          <p className="text-sm text-[#5C5C5A]">
-            No platforms connected.{" "}
-            <a href="/dashboard" className="underline font-bold">
-              Connect one first.
-            </a>
+    <div className="flex gap-8 max-w-4xl">
+      {/* Left — form */}
+      <div className="flex-1 min-w-0 space-y-6">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">
+            New Post
+          </h1>
+          <p className="text-[#5C5C5A] mt-1 text-sm">
+            Post to all your connected platforms at once.
           </p>
-        ) : (
-          <div className="flex flex-wrap gap-2">
-            {connected.map(({ platform, platform_username }) => {
-              const p = PLATFORMS.find((pl) => pl.id === platform);
-              if (!p) return null;
-              const isSelected = selected.includes(platform);
-              return (
-                <button
-                  key={platform}
-                  onClick={() => togglePlatform(platform)}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-2 border border-[#0A0A0A] text-sm font-bold transition-all",
-                    isSelected
-                      ? "bg-[#0A0A0A] text-[#F9F9F7] shadow-[2px_2px_0px_0px_#C8FF00]"
-                      : "bg-[#F9F9F7] text-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A] opacity-50"
-                  )}
-                >
-                  <span
-                    className="w-5 h-5 flex items-center justify-center text-xs font-black"
-                    style={{ background: p.color, color: "#F9F9F7" }}
+        </div>
+
+        {/* Platform selector */}
+        <div>
+          <div className="font-bold text-sm text-[#0A0A0A] mb-3">Post to</div>
+          {connected.length === 0 ? (
+            <p className="text-sm text-[#5C5C5A]">
+              No platforms connected.{" "}
+              <a href="/dashboard" className="underline font-bold">
+                Connect one first.
+              </a>
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {connected.map(({ platform, platform_username }) => {
+                const p = PLATFORMS.find((pl) => pl.id === platform);
+                if (!p) return null;
+                const isSelected = selected.includes(platform);
+                return (
+                  <button
+                    key={platform}
+                    onClick={() => togglePlatform(platform)}
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-2 border border-[#0A0A0A] text-sm font-bold transition-all",
+                      isSelected
+                        ? "bg-[#0A0A0A] text-[#F9F9F7] shadow-[2px_2px_0px_0px_#C8FF00]"
+                        : "bg-[#F9F9F7] text-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A] opacity-50"
+                    )}
                   >
-                    {p.icon}
-                  </span>
-                  {platform_username ?? p.name}
-                </button>
-              );
-            })}
+                    <span
+                      className="w-5 h-5 flex items-center justify-center text-xs font-black"
+                      style={{ background: p.color, color: "#F9F9F7" }}
+                    >
+                      {p.icon}
+                    </span>
+                    {platform_username ?? p.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Title */}
+        <div>
+          <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+            Title / Caption
+          </label>
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder={instagramSelected ? "Write a caption..." : "Video title or post content"}
+            maxLength={instagramSelected ? 2200 : 100}
+            className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
+          />
+          <div className="text-xs text-[#5C5C5A] mt-1 text-right">
+            {title.length}/{instagramSelected ? 2200 : 100}
+          </div>
+        </div>
+
+        {/* Description (only for YouTube) */}
+        {youtubeSelected && (
+          <div>
+            <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+              Description
+            </label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="Add a description..."
+              rows={4}
+              className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all resize-none"
+            />
+          </div>
+        )}
+
+        {/* Media upload */}
+        {needsMedia && (
+          <div>
+            <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+              {youtubeSelected && instagramSelected
+                ? "Media (video for YouTube, image or video for Instagram)"
+                : youtubeSelected
+                ? "Video"
+                : "Photo or Video"}
+              {" "}<span className="text-[#FF4F4F]">*</span>
+            </label>
+            <input
+              type="file"
+              accept={acceptTypes}
+              onChange={(e) => handleFileChange(e.target.files?.[0] ?? null)}
+              className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] cursor-pointer"
+            />
+            {mediaFile && (
+              <div className="text-xs text-[#5C5C5A] mt-1">
+                {mediaFile.name} ({(mediaFile.size / 1024 / 1024).toFixed(1)} MB)
+                {youtubeSelected && !mediaFile.type.startsWith("video/") && (
+                  <span className="text-[#FF4F4F] ml-2">YouTube requires a video file</span>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Padding color picker — only when image needs padding and Instagram is selected */}
+        {instagramSelected && needsPadding && mediaFile && !mediaFile.type.startsWith("video/") && (
+          <div>
+            <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+              Padding color
+              <span className="font-normal text-[#5C5C5A] ml-2">Image ratio needs adjustment</span>
+            </label>
+            <div className="flex gap-2">
+              {PAD_COLORS.map((c) => (
+                <button
+                  key={c.value}
+                  onClick={() => setPadColor(c.value)}
+                  className={cn(
+                    "w-9 h-9 border-2 transition-all",
+                    padColor === c.value
+                      ? "border-[#C8FF00] shadow-[2px_2px_0px_0px_#0A0A0A] scale-110"
+                      : "border-[#0A0A0A]"
+                  )}
+                  style={{ background: c.value }}
+                  title={c.label}
+                />
+              ))}
+              <label className="flex items-center gap-2 text-xs font-bold text-[#0A0A0A] cursor-pointer">
+                <input
+                  type="color"
+                  value={padColor}
+                  onChange={(e) => setPadColor(e.target.value)}
+                  className="w-9 h-9 border-2 border-[#0A0A0A] cursor-pointer p-0"
+                />
+                Custom
+              </label>
+            </div>
+          </div>
+        )}
+
+        {/* Results */}
+        {results && (
+          <div className="border border-[#0A0A0A] p-4 shadow-[4px_4px_0px_0px_#0A0A0A]">
+            <div className="font-bold text-sm mb-3">Results</div>
+            {Object.entries(results).map(([platform, result]) => (
+              <div key={platform} className="flex items-center gap-2 text-sm py-1">
+                <span className={result.success ? "text-green-600 font-bold" : "text-[#FF4F4F] font-bold"}>
+                  {result.success ? "\u2713" : "\u2717"}
+                </span>
+                <span className="font-medium capitalize">{platform}</span>
+                {result.error && <span className="text-[#5C5C5A]">&mdash; {result.error}</span>}
+              </div>
+            ))}
+            <button
+              onClick={() => router.push("/dashboard")}
+              className="mt-4 w-full bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
+            >
+              Back to Dashboard
+            </button>
+          </div>
+        )}
+
+        {/* Post button */}
+        {!results && (
+          <div className="space-y-2">
+            <button
+              onClick={handlePost}
+              disabled={!canPost}
+              className="w-full bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-6 py-3 font-bold text-[#0A0A0A] disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:translate-x-[2px] hover:enabled:translate-y-[2px] hover:enabled:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all flex items-center justify-center gap-3"
+            >
+              {isPosting && (
+                <div className="w-5 h-5 border-2 border-[#0A0A0A] border-t-transparent animate-spin" />
+              )}
+              {isPosting
+                ? "Uploading..."
+                : `Post to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`}
+            </button>
+            {isPosting && postingStatus && (
+              <p className="text-xs text-[#5C5C5A] text-center">{postingStatus}</p>
+            )}
           </div>
         )}
       </div>
 
-      {/* Title */}
-      <div>
-        <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
-          Title / Caption
-        </label>
-        <input
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder={instagramSelected ? "Write a caption..." : "Video title or post content"}
-          maxLength={instagramSelected ? 2200 : 100}
-          className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
-        />
-        <div className="text-xs text-[#5C5C5A] mt-1 text-right">
-          {title.length}/{instagramSelected ? 2200 : 100}
-        </div>
-      </div>
-
-      {/* Description (only for YouTube) */}
-      {youtubeSelected && (
-        <div>
-          <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
-            Description
-          </label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            placeholder="Add a description..."
-            rows={4}
-            className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all resize-none"
-          />
-        </div>
-      )}
-
-      {/* Media upload */}
-      {needsMedia && (
-        <div>
-          <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
-            {youtubeSelected && instagramSelected
-              ? "Media (video for YouTube, image or video for Instagram)"
-              : youtubeSelected
-              ? "Video"
-              : "Photo or Video"}
-            {" "}<span className="text-[#FF4F4F]">*</span>
-          </label>
-          <input
-            type="file"
-            accept={acceptTypes}
-            onChange={(e) => setMediaFile(e.target.files?.[0] ?? null)}
-            className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] cursor-pointer"
-          />
-          {mediaFile && (
-            <div className="text-xs text-[#5C5C5A] mt-1">
-              {mediaFile.name} ({(mediaFile.size / 1024 / 1024).toFixed(1)} MB)
-              {youtubeSelected && !mediaFile.type.startsWith("video/") && (
-                <span className="text-[#FF4F4F] ml-2">YouTube requires a video file</span>
+      {/* Right — media preview */}
+      {mediaPreview && (
+        <div className="hidden md:block w-72 shrink-0">
+          <div className="sticky top-24 space-y-3">
+            <div className="font-bold text-sm text-[#0A0A0A]">Preview</div>
+            <div className="border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] overflow-hidden bg-[#0A0A0A]">
+              {mediaFile?.type.startsWith("video/") ? (
+                <video
+                  ref={videoRef}
+                  src={mediaPreview}
+                  controls
+                  className="w-full"
+                />
+              ) : (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={mediaPreview}
+                  alt="Preview"
+                  className="w-full"
+                />
               )}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Results */}
-      {results && (
-        <div className="border border-[#0A0A0A] p-4 shadow-[4px_4px_0px_0px_#0A0A0A]">
-          <div className="font-bold text-sm mb-3">Results</div>
-          {Object.entries(results).map(([platform, result]) => (
-            <div key={platform} className="flex items-center gap-2 text-sm py-1">
-              <span className={result.success ? "text-green-600 font-bold" : "text-[#FF4F4F] font-bold"}>
-                {result.success ? "\u2713" : "\u2717"}
-              </span>
-              <span className="font-medium capitalize">{platform}</span>
-              {result.error && <span className="text-[#5C5C5A]">&mdash; {result.error}</span>}
-            </div>
-          ))}
-          <button
-            onClick={() => router.push("/dashboard")}
-            className="mt-4 w-full bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
-          >
-            Back to Dashboard
-          </button>
-        </div>
-      )}
-
-      {/* Post button */}
-      {!results && (
-        <div className="space-y-2">
-          <button
-            onClick={handlePost}
-            disabled={!canPost}
-            className="w-full bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-6 py-3 font-bold text-[#0A0A0A] disabled:opacity-40 disabled:cursor-not-allowed hover:enabled:translate-x-[2px] hover:enabled:translate-y-[2px] hover:enabled:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all flex items-center justify-center gap-3"
-          >
-            {isPosting && (
-              <div className="w-5 h-5 border-2 border-[#0A0A0A] border-t-transparent animate-spin" />
+            {mediaFile && (
+              <div className="text-xs text-[#5C5C5A] space-y-1">
+                <div>{mediaFile.name}</div>
+                <div>{(mediaFile.size / 1024 / 1024).toFixed(1)} MB</div>
+                {needsPadding && instagramSelected && !mediaFile.type.startsWith("video/") && (
+                  <div className="text-[#FF4F4F] font-bold">Padding will be added for Instagram</div>
+                )}
+              </div>
             )}
-            {isPosting
-              ? "Uploading..."
-              : `Post to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`}
-          </button>
-          {isPosting && postingStatus && (
-            <p className="text-xs text-[#5C5C5A] text-center">{postingStatus}</p>
-          )}
+          </div>
         </div>
       )}
     </div>
