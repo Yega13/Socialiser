@@ -27,13 +27,16 @@ export async function exchangeInstagramCode(
         code,
       }),
     });
-    const tokenData = await tokenRes.json();
+    const tokenText = await tokenRes.text();
+    // Extract user_id from raw text to avoid JS number precision loss on large IDs
+    const userIdMatch = tokenText.match(/"user_id"\s*:\s*(\d+)/);
+    const tokenData = JSON.parse(tokenText);
 
     if (!tokenData.access_token) {
-      return { success: false, error: `No token: ${JSON.stringify(tokenData)}` };
+      return { success: false, error: `No token: ${tokenText}` };
     }
 
-    const igUserId = String(tokenData.user_id);
+    const igUserId = userIdMatch ? userIdMatch[1] : String(tokenData.user_id);
 
     // Step 2: Exchange for long-lived token (60 days)
     const longTokenRes = await fetch(
