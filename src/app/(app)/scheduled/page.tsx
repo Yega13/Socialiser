@@ -2,7 +2,12 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { createClient } from "@/lib/supabase/client";
-import { processScheduledPosts } from "@/app/(app)/compose/actions";
+import {
+  refreshYouTubeToken,
+  refreshInstagramToken,
+  postToInstagramServer,
+  postCarouselToInstagram,
+} from "@/app/(app)/compose/actions";
 import { cn } from "@/lib/utils";
 
 type ScheduledPost = {
@@ -14,47 +19,345 @@ type ScheduledPost = {
   status: string;
   results: Record<string, { success: boolean; error?: string }> | null;
   media_urls: string[] | null;
+  media_types: string[] | null;
+  thumbnail_url: string | null;
   created_at: string;
+};
+
+type ConnectedPlatform = {
+  id: string;
+  platform: string;
+  platform_username: string | null;
+  platform_user_id: string | null;
+  access_token: string;
+  refresh_token: string | null;
+  token_expires_at: string | null;
 };
 
 export default function ScheduledPage() {
   const [posts, setPosts] = useState<ScheduledPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
+  const [processingStatus, setProcessingStatus] = useState("");
 
   const loadPosts = useCallback(async () => {
     const supabase = createClient();
     const { data } = await supabase
       .from("scheduled_posts")
-      .select("id, title, description, platforms, scheduled_at, status, results, media_urls, created_at")
+      .select("id, title, description, platforms, scheduled_at, status, results, media_urls, media_types, thumbnail_url, created_at")
       .order("scheduled_at", { ascending: true });
     setPosts(data ?? []);
     setLoading(false);
   }, []);
 
-  // On mount: process any overdue posts, then load
+  // Process overdue posts client-side using browser supabase client
+  const processOverduePosts = useCallback(async () => {
+    const supabase = createClient();
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return 0;
+
+    // Get overdue pending posts
+    const { data: overduePosts } = await supabase
+      .from("scheduled_posts")
+      .select("*")
+      .eq("user_id", user.id)
+      .eq("status", "pending")
+      .lte("scheduled_at", new Date().toISOString());
+
+    if (!overduePosts || overduePosts.length === 0) return 0;
+
+    // Get connected platforms
+    const { data: connectedPlatforms } = await supabase
+      .from("connected_platforms")
+      .select("id, platform, platform_username, platform_user_id, access_token, refresh_token, token_expires_at")
+      .eq("user_id", user.id)
+      .eq("is_active", true);
+
+    let processedCount = 0;
+
+    for (const post of overduePosts) {
+      setProcessingStatus(`Processing "${post.title}"...`);
+
+      // Mark as processing
+      await supabase
+        .from("scheduled_posts")
+        .update({ status: "processing" })
+        .eq("id", post.id);
+
+      const results: Record<string, { success: boolean; error?: string }> = {};
+
+      for (const platformId of post.platforms as string[]) {
+        const conn = connectedPlatforms?.find(
+          (c: ConnectedPlatform) => c.platform === platformId
+        );
+        if (!conn) {
+          results[platformId] = { success: false, error: "Not connected" };
+          continue;
+        }
+
+        let accessToken: string = conn.access_token;
+
+        // Refresh token if expired
+        if (
+          conn.token_expires_at &&
+          new Date(conn.token_expires_at) <= new Date()
+        ) {
+          if (platformId === "youtube" && conn.refresh_token) {
+            setProcessingStatus("Refreshing YouTube token...");
+            const newToken = await refreshYouTubeToken(conn.refresh_token);
+            if (newToken) {
+              accessToken = newToken;
+              await supabase
+                .from("connected_platforms")
+                .update({
+                  access_token: newToken,
+                  token_expires_at: new Date(
+                    Date.now() + 3600 * 1000
+                  ).toISOString(),
+                })
+                .eq("id", conn.id);
+            } else {
+              results[platformId] = {
+                success: false,
+                error: "Token refresh failed",
+              };
+              continue;
+            }
+          } else if (platformId === "instagram") {
+            setProcessingStatus("Refreshing Instagram token...");
+            const refreshed = await refreshInstagramToken(accessToken);
+            if (refreshed) {
+              accessToken = refreshed.access_token;
+              await supabase
+                .from("connected_platforms")
+                .update({
+                  access_token: refreshed.access_token,
+                  token_expires_at: new Date(
+                    Date.now() + refreshed.expires_in * 1000
+                  ).toISOString(),
+                })
+                .eq("id", conn.id);
+            } else {
+              results[platformId] = {
+                success: false,
+                error: "Token refresh failed",
+              };
+              continue;
+            }
+          }
+        }
+
+        // ── YouTube ──
+        if (platformId === "youtube") {
+          const videoIndex = (
+            post.media_types as string[] | null
+          )?.findIndex((t: string) => t.startsWith("video/"));
+          if (
+            videoIndex === undefined ||
+            videoIndex === -1 ||
+            !post.media_urls?.[videoIndex]
+          ) {
+            results[platformId] = {
+              success: false,
+              error: "No video file found",
+            };
+            continue;
+          }
+          try {
+            setProcessingStatus("Uploading to YouTube...");
+            const videoUrl = post.media_urls[videoIndex];
+            // Generate signed URL
+            const pathMatch = videoUrl.match(
+              /\/storage\/v1\/object\/public\/media\/(.+)$/
+            );
+            let fetchUrl = videoUrl;
+            if (pathMatch) {
+              const { data: signedData } = await supabase.storage
+                .from("media")
+                .createSignedUrl(pathMatch[1], 3600);
+              if (signedData?.signedUrl) fetchUrl = signedData.signedUrl;
+            }
+
+            const videoRes = await fetch(fetchUrl);
+            if (!videoRes.ok) {
+              results[platformId] = {
+                success: false,
+                error: "Failed to fetch video from storage",
+              };
+              continue;
+            }
+            const videoBlob = await videoRes.blob();
+            const metadata = {
+              snippet: {
+                title: post.title || "New Video",
+                description: post.description || "",
+                categoryId: "22",
+              },
+              status: { privacyStatus: "public" },
+            };
+            const form = new FormData();
+            form.append(
+              "metadata",
+              new Blob([JSON.stringify(metadata)], {
+                type: "application/json",
+              })
+            );
+            form.append("video", videoBlob);
+
+            const ytRes = await fetch(
+              "https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart",
+              {
+                method: "POST",
+                headers: { Authorization: `Bearer ${accessToken}` },
+                body: form,
+              }
+            );
+            if (!ytRes.ok) {
+              const errData = await ytRes.json().catch(() => ({}));
+              results[platformId] = {
+                success: false,
+                error:
+                  errData?.error?.message ?? `YouTube error ${ytRes.status}`,
+              };
+            } else {
+              const ytData = await ytRes.json();
+              if (post.thumbnail_url && ytData.id) {
+                const thumbPathMatch = post.thumbnail_url.match(
+                  /\/storage\/v1\/object\/public\/media\/(.+)$/
+                );
+                let thumbFetchUrl = post.thumbnail_url;
+                if (thumbPathMatch) {
+                  const { data: sd } = await supabase.storage
+                    .from("media")
+                    .createSignedUrl(thumbPathMatch[1], 3600);
+                  if (sd?.signedUrl) thumbFetchUrl = sd.signedUrl;
+                }
+                const thumbRes = await fetch(thumbFetchUrl);
+                if (thumbRes.ok) {
+                  const thumbBlob = await thumbRes.blob();
+                  await fetch(
+                    `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${ytData.id}&uploadType=media`,
+                    {
+                      method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        "Content-Type": "image/jpeg",
+                      },
+                      body: thumbBlob,
+                    }
+                  );
+                }
+              }
+              results[platformId] = { success: true };
+            }
+          } catch (err) {
+            results[platformId] = {
+              success: false,
+              error: err instanceof Error ? err.message : String(err),
+            };
+          }
+        }
+
+        // ── Instagram ──
+        if (platformId === "instagram") {
+          if (!post.media_urls || post.media_urls.length === 0) {
+            results[platformId] = {
+              success: false,
+              error: "No media files found",
+            };
+            continue;
+          }
+          if (!conn.platform_user_id) {
+            results[platformId] = {
+              success: false,
+              error: "Instagram account ID missing. Reconnect.",
+            };
+            continue;
+          }
+
+          setProcessingStatus("Publishing to Instagram...");
+          const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+
+          // Convert public URLs to signed URLs
+          const items: { url: string; isVideo: boolean }[] = [];
+          for (let i = 0; i < (post.media_urls as string[]).length; i++) {
+            const publicUrl = (post.media_urls as string[])[i];
+            const isVideo =
+              (post.media_types as string[] | null)?.[i]?.startsWith(
+                "video/"
+              ) ?? false;
+            const pathMatch = publicUrl.match(
+              /\/storage\/v1\/object\/public\/media\/(.+)$/
+            );
+            if (pathMatch) {
+              const { data: signedData } = await supabase.storage
+                .from("media")
+                .createSignedUrl(pathMatch[1], 3600);
+              items.push({
+                url: signedData?.signedUrl || publicUrl,
+                isVideo,
+              });
+            } else {
+              items.push({ url: publicUrl, isVideo });
+            }
+          }
+
+          if (items.length === 1) {
+            results[platformId] = await postToInstagramServer(
+              accessToken,
+              conn.platform_user_id,
+              caption,
+              items[0].url,
+              items[0].isVideo
+            );
+          } else {
+            results[platformId] = await postCarouselToInstagram(
+              accessToken,
+              conn.platform_user_id,
+              caption,
+              items
+            );
+          }
+        }
+      }
+
+      const allFailed = Object.values(results).every((r) => !r.success);
+      await supabase
+        .from("scheduled_posts")
+        .update({
+          status: allFailed ? "failed" : "completed",
+          results,
+        })
+        .eq("id", post.id);
+
+      processedCount++;
+    }
+
+    setProcessingStatus("");
+    return processedCount;
+  }, []);
+
+  // On mount: process overdue posts, then load
   useEffect(() => {
     async function init() {
       setProcessing(true);
       try {
-        const { processed } = await processScheduledPosts();
-        if (processed > 0) {
-          // Reload to show updated statuses
-          await loadPosts();
-        }
+        await processOverduePosts();
       } catch {
-        // Processing failed silently — still load posts
+        // Processing failed — still load posts
       }
       setProcessing(false);
       await loadPosts();
     }
     init();
-  }, [loadPosts]);
+  }, [loadPosts, processOverduePosts]);
 
   async function handleProcessNow() {
     setProcessing(true);
     try {
-      await processScheduledPosts();
+      await processOverduePosts();
     } catch {
       // ignore
     }
@@ -62,41 +365,67 @@ export default function ScheduledPage() {
     setProcessing(false);
   }
 
-  async function cancelPost(id: string) {
+  async function deletePost(id: string) {
     const supabase = createClient();
     await supabase.from("scheduled_posts").delete().eq("id", id);
     setPosts((prev) => prev.filter((p) => p.id !== id));
+  }
+
+  async function deleteAllCompleted() {
+    const supabase = createClient();
+    const ids = [...completed, ...failed].map((p) => p.id);
+    if (ids.length === 0) return;
+    await supabase.from("scheduled_posts").delete().in("id", ids);
+    setPosts((prev) => prev.filter((p) => !ids.includes(p.id)));
   }
 
   const pending = posts.filter((p) => p.status === "pending");
   const processingPosts = posts.filter((p) => p.status === "processing");
   const completed = posts.filter((p) => p.status === "completed");
   const failed = posts.filter((p) => p.status === "failed");
-  const hasOverdue = pending.some((p) => new Date(p.scheduled_at) <= new Date());
+  const hasOverdue = pending.some(
+    (p) => new Date(p.scheduled_at) <= new Date()
+  );
 
   return (
     <div className="max-w-2xl space-y-6">
       <div>
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">Scheduled Posts</h1>
-            <p className="text-[#5C5C5A] mt-1 text-sm">Manage your upcoming and past scheduled posts.</p>
+            <h1 className="text-2xl sm:text-3xl font-black text-[#0A0A0A]">
+              Scheduled Posts
+            </h1>
+            <p className="text-[#5C5C5A] mt-1 text-sm">
+              Manage your upcoming and past scheduled posts.
+            </p>
           </div>
-          {hasOverdue && !processing && (
-            <button
-              onClick={handleProcessNow}
-              className="bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all shrink-0"
-            >
-              Post now
-            </button>
-          )}
+          <div className="flex gap-2 shrink-0">
+            {(completed.length > 0 || failed.length > 0) && !processing && (
+              <button
+                onClick={deleteAllCompleted}
+                className="bg-white border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#FF4F4F] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
+              >
+                Clear history
+              </button>
+            )}
+            {hasOverdue && !processing && (
+              <button
+                onClick={handleProcessNow}
+                className="bg-[#C8FF00] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] px-4 py-2 font-bold text-sm text-[#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] transition-all"
+              >
+                Post now
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
       {loading || processing ? (
         <div className="flex items-center gap-2 text-sm text-[#5C5C5A]">
           <div className="w-4 h-4 border-2 border-[#0A0A0A] border-t-transparent animate-spin" />
-          {processing ? "Processing overdue posts..." : "Loading..."}
+          {processing
+            ? processingStatus || "Processing overdue posts..."
+            : "Loading..."}
         </div>
       ) : posts.length === 0 ? (
         <div className="border border-[#0A0A0A] p-6 shadow-[4px_4px_0px_0px_#0A0A0A] text-center">
@@ -113,7 +442,9 @@ export default function ScheduledPage() {
           {/* Processing */}
           {processingPosts.length > 0 && (
             <div>
-              <div className="font-bold text-sm text-[#00D4FF] mb-3">Processing ({processingPosts.length})</div>
+              <div className="font-bold text-sm text-[#00D4FF] mb-3">
+                Processing ({processingPosts.length})
+              </div>
               <div className="space-y-3">
                 {processingPosts.map((post) => (
                   <PostCard key={post.id} post={post} />
@@ -125,10 +456,16 @@ export default function ScheduledPage() {
           {/* Pending */}
           {pending.length > 0 && (
             <div>
-              <div className="font-bold text-sm text-[#7C3AED] mb-3">Upcoming ({pending.length})</div>
+              <div className="font-bold text-sm text-[#7C3AED] mb-3">
+                Upcoming ({pending.length})
+              </div>
               <div className="space-y-3">
                 {pending.map((post) => (
-                  <PostCard key={post.id} post={post} onCancel={() => cancelPost(post.id)} />
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    onCancel={() => deletePost(post.id)}
+                  />
                 ))}
               </div>
             </div>
@@ -137,10 +474,16 @@ export default function ScheduledPage() {
           {/* Completed */}
           {completed.length > 0 && (
             <div>
-              <div className="font-bold text-sm text-green-600 mb-3">Completed ({completed.length})</div>
+              <div className="font-bold text-sm text-green-600 mb-3">
+                Completed ({completed.length})
+              </div>
               <div className="space-y-3">
                 {completed.map((post) => (
-                  <PostCard key={post.id} post={post} />
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    onDelete={() => deletePost(post.id)}
+                  />
                 ))}
               </div>
             </div>
@@ -149,10 +492,16 @@ export default function ScheduledPage() {
           {/* Failed */}
           {failed.length > 0 && (
             <div>
-              <div className="font-bold text-sm text-[#FF4F4F] mb-3">Failed ({failed.length})</div>
+              <div className="font-bold text-sm text-[#FF4F4F] mb-3">
+                Failed ({failed.length})
+              </div>
               <div className="space-y-3">
                 {failed.map((post) => (
-                  <PostCard key={post.id} post={post} onCancel={() => cancelPost(post.id)} />
+                  <PostCard
+                    key={post.id}
+                    post={post}
+                    onDelete={() => deletePost(post.id)}
+                  />
                 ))}
               </div>
             </div>
@@ -163,7 +512,15 @@ export default function ScheduledPage() {
   );
 }
 
-function PostCard({ post, onCancel }: { post: ScheduledPost; onCancel?: () => void }) {
+function PostCard({
+  post,
+  onCancel,
+  onDelete,
+}: {
+  post: ScheduledPost;
+  onCancel?: () => void;
+  onDelete?: () => void;
+}) {
   const scheduledDate = new Date(post.scheduled_at);
   const isPast = scheduledDate <= new Date();
 
@@ -171,39 +528,63 @@ function PostCard({ post, onCancel }: { post: ScheduledPost; onCancel?: () => vo
     <div
       className={cn(
         "border border-[#0A0A0A] p-4 shadow-[4px_4px_0px_0px_#0A0A0A]",
-        post.status === "completed" && "border-green-600 shadow-[4px_4px_0px_0px_#16a34a]",
-        post.status === "failed" && "border-[#FF4F4F] shadow-[4px_4px_0px_0px_#FF4F4F]",
-        post.status === "pending" && "border-[#7C3AED] shadow-[4px_4px_0px_0px_#7C3AED]",
-        post.status === "processing" && "border-[#00D4FF] shadow-[4px_4px_0px_0px_#00D4FF]"
+        post.status === "completed" &&
+          "border-green-600 shadow-[4px_4px_0px_0px_#16a34a]",
+        post.status === "failed" &&
+          "border-[#FF4F4F] shadow-[4px_4px_0px_0px_#FF4F4F]",
+        post.status === "pending" &&
+          "border-[#7C3AED] shadow-[4px_4px_0px_0px_#7C3AED]",
+        post.status === "processing" &&
+          "border-[#00D4FF] shadow-[4px_4px_0px_0px_#00D4FF]"
       )}
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="font-bold text-sm text-[#0A0A0A] truncate">{post.title}</div>
+          <div className="font-bold text-sm text-[#0A0A0A] truncate">
+            {post.title}
+          </div>
           <div className="text-xs text-[#5C5C5A] mt-0.5">
-            {scheduledDate.toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+            {scheduledDate.toLocaleString([], {
+              month: "short",
+              day: "numeric",
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
           </div>
           <div className="flex gap-1 mt-1.5">
             {post.platforms.map((p) => (
-              <span key={p} className="text-[10px] font-bold px-1.5 py-0.5 bg-[#0A0A0A] text-[#F9F9F7] capitalize">
+              <span
+                key={p}
+                className="text-[10px] font-bold px-1.5 py-0.5 bg-[#0A0A0A] text-[#F9F9F7] capitalize"
+              >
                 {p}
               </span>
             ))}
           </div>
           {post.media_urls && post.media_urls.length > 0 && (
             <div className="text-[10px] text-[#5C5C5A] mt-1">
-              {post.media_urls.length} media file{post.media_urls.length !== 1 ? "s" : ""}
+              {post.media_urls.length} media file
+              {post.media_urls.length !== 1 ? "s" : ""}
             </div>
           )}
           {post.results && (
             <div className="mt-2 space-y-0.5">
               {Object.entries(post.results).map(([platform, result]) => (
                 <div key={platform} className="text-xs flex items-center gap-1">
-                  <span className={result.success ? "text-green-600" : "text-[#FF4F4F]"}>
+                  <span
+                    className={
+                      result.success ? "text-green-600" : "text-[#FF4F4F]"
+                    }
+                  >
                     {result.success ? "\u2713" : "\u2717"}
                   </span>
                   <span className="capitalize">{platform}</span>
-                  {result.error && <span className="text-[#5C5C5A]"> &mdash; {result.error}</span>}
+                  {result.error && (
+                    <span className="text-[#5C5C5A]">
+                      {" "}
+                      &mdash; {result.error}
+                    </span>
+                  )}
                 </div>
               ))}
             </div>
@@ -219,14 +600,24 @@ function PostCard({ post, onCancel }: { post: ScheduledPost; onCancel?: () => vo
               post.status === "failed" && "bg-[#FF4F4F] text-white"
             )}
           >
-            {post.status === "pending" && isPast ? "OVERDUE" : post.status.toUpperCase()}
+            {post.status === "pending" && isPast
+              ? "OVERDUE"
+              : post.status.toUpperCase()}
           </span>
-          {onCancel && post.status !== "completed" && (
+          {onCancel && post.status === "pending" && (
             <button
               onClick={onCancel}
               className="text-[10px] text-[#FF4F4F] font-bold hover:underline mt-1"
             >
-              {post.status === "failed" ? "Delete" : "Cancel"}
+              Cancel
+            </button>
+          )}
+          {onDelete && (
+            <button
+              onClick={onDelete}
+              className="text-[10px] text-[#FF4F4F] font-bold hover:underline mt-1"
+            >
+              Delete
             </button>
           )}
         </div>

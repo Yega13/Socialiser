@@ -692,7 +692,7 @@ export default function ComposePage() {
         )}
 
         {/* Aspect ratio selector */}
-        {instagramSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+        {instagramSelected && mediaItems.length > 0 && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Crop mode
@@ -756,7 +756,7 @@ export default function ComposePage() {
         )}
 
         {/* Image quality */}
-        {instagramSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+        {instagramSelected && mediaItems.length > 0 && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Image quality
@@ -781,7 +781,7 @@ export default function ComposePage() {
         )}
 
         {/* Image filters */}
-        {instagramSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+        {instagramSelected && mediaItems.length > 0 && (
           <div>
             <button
               type="button"
