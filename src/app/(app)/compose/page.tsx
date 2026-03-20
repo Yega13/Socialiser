@@ -128,11 +128,31 @@ export default function ComposePage() {
         } else {
           const isVideo = mediaFile.type.startsWith("video/");
 
+          // Instagram API only accepts JPEG for images — convert if needed
+          let fileToUpload: File | Blob = mediaFile;
+          let uploadName = mediaFile.name;
+          if (!isVideo && mediaFile.type !== "image/jpeg") {
+            setPostingStatus("Converting image to JPEG...");
+            const canvas = document.createElement("canvas");
+            const img = new Image();
+            const blobUrl = URL.createObjectURL(mediaFile);
+            await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
+            canvas.width = img.width;
+            canvas.height = img.height;
+            canvas.getContext("2d")!.drawImage(img, 0, 0);
+            URL.revokeObjectURL(blobUrl);
+            const jpegBlob = await new Promise<Blob>((resolve) =>
+              canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.92)
+            );
+            fileToUpload = jpegBlob;
+            uploadName = mediaFile.name.replace(/\.[^.]+$/, ".jpg");
+          }
+
           setPostingStatus("Uploading media...");
-          const fileName = `instagram/${Date.now()}-${mediaFile.name}`;
+          const fileName = `instagram/${Date.now()}-${uploadName}`;
           const { error: uploadError } = await supabase.storage
             .from("media")
-            .upload(fileName, mediaFile, { upsert: true });
+            .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? mediaFile.type : "image/jpeg" });
 
           if (uploadError) {
             postResults[platformId] = { success: false, error: `Upload failed: ${uploadError.message}` };
