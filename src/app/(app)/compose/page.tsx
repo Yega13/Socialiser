@@ -195,6 +195,7 @@ export default function ComposePage() {
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoTime, setVideoTime] = useState(0);
   const [previewTab, setPreviewTab] = useState<string>("instagram");
+  const [policyAccepted, setPolicyAccepted] = useState(false);
   const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -545,6 +546,7 @@ export default function ComposePage() {
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const canPost =
     !isPosting &&
+    policyAccepted &&
     selected.length > 0 &&
     title.trim().length > 0 &&
     (!needsMedia || mediaItems.length > 0) &&
@@ -691,8 +693,8 @@ export default function ComposePage() {
           </div>
         )}
 
-        {/* Aspect ratio selector */}
-        {instagramSelected && mediaItems.length > 0 && (
+        {/* Aspect ratio selector — Instagram images only, hidden when YouTube also selected */}
+        {instagramSelected && !youtubeSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Crop mode
@@ -720,8 +722,8 @@ export default function ComposePage() {
           </div>
         )}
 
-        {/* Padding color picker */}
-        {instagramSelected && aspectMode === "original" && hasAnyPadding && (
+        {/* Padding color picker — Instagram only */}
+        {instagramSelected && !youtubeSelected && aspectMode === "original" && hasAnyPadding && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Padding color
@@ -755,8 +757,8 @@ export default function ComposePage() {
           </div>
         )}
 
-        {/* Image quality */}
-        {instagramSelected && mediaItems.length > 0 && (
+        {/* Image quality — Instagram images only */}
+        {instagramSelected && !youtubeSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               Image quality
@@ -780,8 +782,8 @@ export default function ComposePage() {
           </div>
         )}
 
-        {/* Image filters */}
-        {instagramSelected && mediaItems.length > 0 && (
+        {/* Image filters — Instagram images only */}
+        {instagramSelected && !youtubeSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
           <div>
             <button
               type="button"
@@ -852,6 +854,30 @@ export default function ComposePage() {
             >
               Back to Dashboard
             </button>
+          </div>
+        )}
+
+        {/* Content policy */}
+        {!results && (
+          <div className="border border-[#0A0A0A] p-3 shadow-[2px_2px_0px_0px_#0A0A0A] space-y-2">
+            <div className="font-bold text-xs text-[#0A0A0A]">Content Policy</div>
+            <p className="text-[10px] text-[#5C5C5A] leading-relaxed">
+              You must not post content that includes: violence or terrorism, sexual or explicit material,
+              hate speech or discrimination, harassment or bullying, self-harm promotion,
+              illegal activities, spam or misleading content, or content that violates intellectual property rights.
+              Violations may result in account suspension.
+            </p>
+            <label className="flex items-start gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={policyAccepted}
+                onChange={(e) => setPolicyAccepted(e.target.checked)}
+                className="w-4 h-4 accent-[#0A0A0A] cursor-pointer mt-0.5 shrink-0"
+              />
+              <span className="text-xs text-[#0A0A0A]">
+                I confirm this content complies with platform guidelines and applicable laws
+              </span>
+            </label>
           </div>
         )}
 

@@ -447,7 +447,7 @@ export default function ScheduledPage() {
               </div>
               <div className="space-y-3">
                 {processingPosts.map((post) => (
-                  <PostCard key={post.id} post={post} />
+                  <PostCard key={post.id} post={post} onDelete={() => deletePost(post.id)} />
                 ))}
               </div>
             </div>
@@ -464,7 +464,7 @@ export default function ScheduledPage() {
                   <PostCard
                     key={post.id}
                     post={post}
-                    onCancel={() => deletePost(post.id)}
+                    onDelete={() => deletePost(post.id)}
                   />
                 ))}
               </div>
@@ -514,11 +514,9 @@ export default function ScheduledPage() {
 
 function PostCard({
   post,
-  onCancel,
   onDelete,
 }: {
   post: ScheduledPost;
-  onCancel?: () => void;
   onDelete?: () => void;
 }) {
   const scheduledDate = new Date(post.scheduled_at);
@@ -539,7 +537,7 @@ function PostCard({
       )}
     >
       <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0">
+        <div className="min-w-0 flex-1">
           <div className="font-bold text-sm text-[#0A0A0A] truncate">
             {post.title}
           </div>
@@ -590,7 +588,7 @@ function PostCard({
             </div>
           )}
         </div>
-        <div className="flex flex-col items-end gap-1 shrink-0">
+        <div className="flex flex-col items-end gap-2 shrink-0">
           <span
             className={cn(
               "text-[10px] font-bold px-2 py-0.5",
@@ -604,20 +602,19 @@ function PostCard({
               ? "OVERDUE"
               : post.status.toUpperCase()}
           </span>
-          {onCancel && post.status === "pending" && (
-            <button
-              onClick={onCancel}
-              className="text-[10px] text-[#FF4F4F] font-bold hover:underline mt-1"
-            >
-              Cancel
-            </button>
-          )}
           {onDelete && (
             <button
               onClick={onDelete}
-              className="text-[10px] text-[#FF4F4F] font-bold hover:underline mt-1"
+              className="p-1.5 text-[#FF4F4F] hover:bg-[#FF4F4F]/10 transition-colors"
+              title="Delete post"
             >
-              Delete
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
+                <path d="M3 6h18" />
+                <path d="M8 6V4h8v2" />
+                <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
             </button>
           )}
         </div>
