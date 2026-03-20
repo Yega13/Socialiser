@@ -194,6 +194,7 @@ export default function ComposePage() {
   const [thumbnailPreview, setThumbnailPreview] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoTime, setVideoTime] = useState(0);
+  const [previewTab, setPreviewTab] = useState<string>("instagram");
   const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -272,6 +273,15 @@ export default function ComposePage() {
         }
       });
   }, []);
+
+  // Auto-switch preview tab when current tab's platform is deselected
+  useEffect(() => {
+    if (previewTab === "instagram" && !selected.includes("instagram") && selected.includes("youtube")) {
+      setPreviewTab("youtube");
+    } else if (previewTab === "youtube" && !selected.includes("youtube") && selected.includes("instagram")) {
+      setPreviewTab("instagram");
+    }
+  }, [selected, previewTab]);
 
   async function handleFilesChange(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -620,7 +630,7 @@ export default function ComposePage() {
           <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
             Description / Links
             <span className="font-normal text-[#5C5C5A] ml-2">
-              {instagramSelected ? "Added below caption on Instagram" : "Optional"}
+              Optional
             </span>
           </label>
           <textarea
@@ -900,197 +910,272 @@ export default function ComposePage() {
         )}
       </div>
 
-      {/* Right — Instagram-style preview */}
+      {/* Right — Preview panel */}
       {mediaItems.length > 0 && (
         <div className="hidden md:block w-80 shrink-0">
           <div className="sticky top-24 space-y-3">
             <div className="font-bold text-sm text-[#0A0A0A]">Preview</div>
 
-            {/* Instagram post mockup */}
-            <div className="border border-[#DBDBDB] bg-white rounded-sm overflow-hidden">
-              {/* Header — avatar + username */}
-              <div className="flex items-center gap-2.5 px-3 py-2.5">
-                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FCAF45] via-[#E1306C] to-[#833AB4] flex items-center justify-center">
-                  <div className="w-7 h-7 rounded-full bg-white flex items-center justify-center text-[10px] font-bold text-[#262626]">
-                    {(instagramConnected?.platform_username ?? "you")[0].toUpperCase()}
-                  </div>
-                </div>
-                <span className="text-[13px] font-semibold text-[#262626]">
-                  {instagramConnected?.platform_username ?? "your_account"}
-                </span>
-              </div>
-
-              {/* Image area */}
-              <div
-                ref={previewRef}
-                className={cn(
-                  "relative bg-black overflow-hidden select-none",
-                  canDrag && "cursor-grab",
-                  canDrag && isDragging && "cursor-grabbing"
-                )}
-                style={{
-                  aspectRatio: aspectMode === "square" ? "1/1"
-                    : aspectMode === "portrait" ? "4/5"
-                    : aspectMode === "landscape" ? "1.91/1"
-                    : "1/1",
-                }}
-                onMouseDown={(e) => { e.preventDefault(); handleDragStart(e.clientX, e.clientY); }}
-                onTouchStart={(e) => handleDragStart(e.touches[0].clientX, e.touches[0].clientY)}
-              >
-                {currentPreview?.file.type.startsWith("video/") ? (
-                  <video
-                    ref={videoRef}
-                    key={currentPreview.preview}
-                    src={currentPreview.preview}
-                    controls
-                    className="w-full h-full object-contain"
-                    onLoadedMetadata={(e) => setVideoDuration((e.target as HTMLVideoElement).duration)}
-                    onTimeUpdate={(e) => setVideoTime((e.target as HTMLVideoElement).currentTime)}
-                  />
-                ) : currentPreview ? (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img
-                    src={currentPreview.preview}
-                    alt="Preview"
-                    draggable={false}
+            {/* Platform preview tabs — show when 2+ platforms selected */}
+            {selected.length > 1 && (
+              <div className="flex gap-2">
+                {instagramSelected && (
+                  <button
+                    onClick={() => setPreviewTab("instagram")}
                     className={cn(
-                      "w-full h-full pointer-events-none",
-                      aspectMode === "original" ? "object-contain" : "object-cover"
+                      "flex-1 px-3 py-2 text-xs font-bold border border-[#0A0A0A] transition-all",
+                      previewTab === "instagram"
+                        ? "bg-[#E1306C] text-white shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "bg-white text-[#0A0A0A] hover:bg-[#F0F0F0]"
                     )}
-                    style={{
-                      ...(aspectMode !== "original" ? {
-                        objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%`,
-                      } : {}),
-                      filter: `brightness(${filters.brightness}%) contrast(${filters.contrast}%) saturate(${filters.saturation}%)`,
-                    }}
-                  />
-                ) : null}
-
-                {/* Carousel dots */}
-                {mediaItems.length > 1 && (
-                  <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1">
-                    {mediaItems.map((_, i) => (
-                      <button
-                        key={i}
-                        onClick={() => setPreviewIndex(i)}
-                        className={cn(
-                          "w-1.5 h-1.5 rounded-full transition-all",
-                          i === previewIndex ? "bg-[#0095F6] scale-125" : "bg-white/60"
-                        )}
-                      />
-                    ))}
-                  </div>
-                )}
-
-                {/* Carousel arrows */}
-                {mediaItems.length > 1 && previewIndex > 0 && (
-                  <button
-                    onClick={() => setPreviewIndex((p) => p - 1)}
-                    className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-[#262626] text-xs shadow-sm"
                   >
-                    &lt;
+                    Instagram Preview
                   </button>
                 )}
-                {mediaItems.length > 1 && previewIndex < mediaItems.length - 1 && (
+                {youtubeSelected && (
                   <button
-                    onClick={() => setPreviewIndex((p) => p + 1)}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-[#262626] text-xs shadow-sm"
-                  >
-                    &gt;
-                  </button>
-                )}
-              </div>
-
-              {/* Action icons */}
-              <div className="px-3 pt-2.5 pb-1 flex items-center gap-4">
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-              </div>
-
-              {/* Caption preview */}
-              <div className="px-3 pb-3 pt-1">
-                <p className="text-[13px] text-[#262626] leading-[18px]">
-                  <span className="font-semibold">{instagramConnected?.platform_username ?? "your_account"}</span>{" "}
-                  <span className="whitespace-pre-wrap break-words">
-                    {title || "Your caption here..."}
-                    {description && (
-                      <>
-                        {"\n\n"}
-                        <span className="text-[#00376B]">{description}</span>
-                      </>
+                    onClick={() => setPreviewTab("youtube")}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-xs font-bold border border-[#0A0A0A] transition-all",
+                      previewTab === "youtube"
+                        ? "bg-[#FF0000] text-white shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "bg-white text-[#0A0A0A] hover:bg-[#F0F0F0]"
                     )}
-                  </span>
-                </p>
-              </div>
-            </div>
-
-            {/* Drag hint */}
-            {canDrag && currentPreviewIsImage && (
-              <div className="flex items-center justify-between">
-                <span className="text-[10px] text-[#5C5C5A]">Drag image to reposition</span>
-                {(currentPreview!.cropOffset.x !== 0.5 || currentPreview!.cropOffset.y !== 0.5) && (
-                  <button
-                    onClick={() => setMediaItems((prev) => prev.map((item, i) =>
-                      i === previewIndex ? { ...item, cropOffset: { x: 0.5, y: 0.5 } } : item
-                    ))}
-                    className="text-[10px] text-[#0095F6] font-bold hover:underline"
                   >
-                    Reset
+                    YouTube Preview
                   </button>
                 )}
               </div>
             )}
 
-            {/* YouTube thumbnail picker */}
-            {youtubeSelected && currentPreview && currentPreview.file.type.startsWith("video/") && videoDuration > 0 && (
-              <div className="border border-[#0A0A0A] p-3 shadow-[2px_2px_0px_0px_#0A0A0A] space-y-2">
-                <div className="font-bold text-xs text-[#0A0A0A]">YouTube Thumbnail</div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[10px] text-[#5C5C5A] shrink-0 w-8">
-                    {Math.floor(videoTime / 60)}:{String(Math.floor(videoTime % 60)).padStart(2, "0")}
-                  </span>
-                  <input
-                    type="range"
-                    min={0}
-                    max={videoDuration}
-                    step={0.1}
-                    value={videoTime}
-                    onChange={(e) => {
-                      const t = Number(e.target.value);
-                      setVideoTime(t);
-                      if (videoRef.current) videoRef.current.currentTime = t;
+            {/* ── Instagram Preview ── */}
+            {(selected.length === 1 ? instagramSelected : previewTab === "instagram" && instagramSelected) && (
+              <>
+                <div className="border border-[#DBDBDB] bg-white rounded-sm overflow-hidden">
+                  {/* Header — avatar + username */}
+                  <div className="flex items-center gap-2.5 px-3 py-2.5">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FCAF45] via-[#E1306C] to-[#833AB4] flex items-center justify-center">
+                      <div className="w-7 h-7 rounded-full bg-white flex items-center justify-center text-[10px] font-bold text-[#262626]">
+                        {(instagramConnected?.platform_username ?? "you")[0].toUpperCase()}
+                      </div>
+                    </div>
+                    <span className="text-[13px] font-semibold text-[#262626]">
+                      {instagramConnected?.platform_username ?? "your_account"}
+                    </span>
+                  </div>
+
+                  {/* Image area */}
+                  <div
+                    ref={previewRef}
+                    className={cn(
+                      "relative bg-black overflow-hidden select-none",
+                      canDrag && "cursor-grab",
+                      canDrag && isDragging && "cursor-grabbing"
+                    )}
+                    style={{
+                      aspectRatio: aspectMode === "square" ? "1/1"
+                        : aspectMode === "portrait" ? "4/5"
+                        : aspectMode === "landscape" ? "1.91/1"
+                        : "1/1",
                     }}
-                    className="flex-1 accent-[#FF0000] h-1.5 cursor-pointer"
-                  />
-                  <span className="text-[10px] text-[#5C5C5A] shrink-0 w-8 text-right">
-                    {Math.floor(videoDuration / 60)}:{String(Math.floor(videoDuration % 60)).padStart(2, "0")}
-                  </span>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    onClick={captureVideoFrame}
-                    className="flex-1 bg-[#FF0000] text-white border border-[#0A0A0A] px-2 py-1.5 text-xs font-bold shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_#0A0A0A] transition-all"
+                    onMouseDown={(e) => { e.preventDefault(); handleDragStart(e.clientX, e.clientY); }}
+                    onTouchStart={(e) => handleDragStart(e.touches[0].clientX, e.touches[0].clientY)}
                   >
-                    Capture frame
-                  </button>
-                  {thumbnailBlob && (
-                    <button
-                      onClick={() => { setThumbnailBlob(null); if (thumbnailPreview) URL.revokeObjectURL(thumbnailPreview); setThumbnailPreview(null); }}
-                      className="px-2 py-1.5 border border-[#0A0A0A] text-xs font-bold text-[#FF4F4F] shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_#0A0A0A] transition-all"
-                    >
-                      Remove
-                    </button>
-                  )}
+                    {currentPreview?.file.type.startsWith("video/") ? (
+                      <video
+                        ref={videoRef}
+                        key={currentPreview.preview}
+                        src={currentPreview.preview}
+                        controls
+                        className="w-full h-full object-contain"
+                        onLoadedMetadata={(e) => setVideoDuration((e.target as HTMLVideoElement).duration)}
+                        onTimeUpdate={(e) => setVideoTime((e.target as HTMLVideoElement).currentTime)}
+                      />
+                    ) : currentPreview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={currentPreview.preview}
+                        alt="Preview"
+                        draggable={false}
+                        className={cn(
+                          "w-full h-full pointer-events-none",
+                          aspectMode === "original" ? "object-contain" : "object-cover"
+                        )}
+                        style={{
+                          ...(aspectMode !== "original" ? {
+                            objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%`,
+                          } : {}),
+                          filter: `brightness(${filters.brightness}%) contrast(${filters.contrast}%) saturate(${filters.saturation}%)`,
+                        }}
+                      />
+                    ) : null}
+
+                    {/* Carousel dots */}
+                    {mediaItems.length > 1 && (
+                      <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1">
+                        {mediaItems.map((_, i) => (
+                          <button
+                            key={i}
+                            onClick={() => setPreviewIndex(i)}
+                            className={cn(
+                              "w-1.5 h-1.5 rounded-full transition-all",
+                              i === previewIndex ? "bg-[#0095F6] scale-125" : "bg-white/60"
+                            )}
+                          />
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Carousel arrows */}
+                    {mediaItems.length > 1 && previewIndex > 0 && (
+                      <button
+                        onClick={() => setPreviewIndex((p) => p - 1)}
+                        className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-[#262626] text-xs shadow-sm"
+                      >
+                        &lt;
+                      </button>
+                    )}
+                    {mediaItems.length > 1 && previewIndex < mediaItems.length - 1 && (
+                      <button
+                        onClick={() => setPreviewIndex((p) => p + 1)}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-[#262626] text-xs shadow-sm"
+                      >
+                        &gt;
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Action icons */}
+                  <div className="px-3 pt-2.5 pb-1 flex items-center gap-4">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                  </div>
+
+                  {/* Caption preview */}
+                  <div className="px-3 pb-3 pt-1">
+                    <p className="text-[13px] text-[#262626] leading-[18px]">
+                      <span className="font-semibold">{instagramConnected?.platform_username ?? "your_account"}</span>{" "}
+                      <span className="whitespace-pre-wrap break-words">
+                        {title || "Your caption here..."}
+                        {description && (
+                          <>
+                            {"\n\n"}
+                            <span className="text-[#00376B]">{description}</span>
+                          </>
+                        )}
+                      </span>
+                    </p>
+                  </div>
                 </div>
-                {thumbnailPreview && (
-                  <div className="mt-1">
-                    <div className="text-[10px] text-[#5C5C5A] mb-1">Thumbnail preview:</div>
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={thumbnailPreview} alt="Thumbnail" className="w-full border border-[#0A0A0A]" />
+
+                {/* Drag hint */}
+                {canDrag && currentPreviewIsImage && (
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-[#5C5C5A]">Drag image to reposition</span>
+                    {(currentPreview!.cropOffset.x !== 0.5 || currentPreview!.cropOffset.y !== 0.5) && (
+                      <button
+                        onClick={() => setMediaItems((prev) => prev.map((item, i) =>
+                          i === previewIndex ? { ...item, cropOffset: { x: 0.5, y: 0.5 } } : item
+                        ))}
+                        className="text-[10px] text-[#0095F6] font-bold hover:underline"
+                      >
+                        Reset
+                      </button>
+                    )}
                   </div>
                 )}
-              </div>
+              </>
+            )}
+
+            {/* ── YouTube Preview ── */}
+            {(selected.length === 1 ? youtubeSelected : previewTab === "youtube" && youtubeSelected) && (
+              <>
+                <div className="border border-[#0A0A0A] bg-white overflow-hidden shadow-[2px_2px_0px_0px_#0A0A0A]">
+                  {/* Video player area */}
+                  <div className="relative bg-black" style={{ aspectRatio: "16/9" }}>
+                    {currentPreview?.file.type.startsWith("video/") ? (
+                      <video
+                        ref={videoRef}
+                        key={currentPreview.preview}
+                        src={currentPreview.preview}
+                        controls
+                        className="w-full h-full object-contain"
+                        onLoadedMetadata={(e) => setVideoDuration((e.target as HTMLVideoElement).duration)}
+                        onTimeUpdate={(e) => setVideoTime((e.target as HTMLVideoElement).currentTime)}
+                      />
+                    ) : currentPreview ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={currentPreview.preview}
+                        alt="Preview"
+                        className="w-full h-full object-contain"
+                      />
+                    ) : null}
+                  </div>
+
+                  {/* Title & description */}
+                  <div className="p-3 space-y-1.5">
+                    <h3 className="font-bold text-sm text-[#0F0F0F] leading-tight line-clamp-2">
+                      {title || "Video title"}
+                    </h3>
+                    {description && (
+                      <p className="text-xs text-[#606060] line-clamp-2">{description}</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* YouTube thumbnail picker */}
+                {currentPreview && currentPreview.file.type.startsWith("video/") && videoDuration > 0 && (
+                  <div className="border border-[#0A0A0A] p-3 shadow-[2px_2px_0px_0px_#0A0A0A] space-y-2">
+                    <div className="font-bold text-xs text-[#0A0A0A]">YouTube Thumbnail</div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-[#5C5C5A] shrink-0 w-8">
+                        {Math.floor(videoTime / 60)}:{String(Math.floor(videoTime % 60)).padStart(2, "0")}
+                      </span>
+                      <input
+                        type="range"
+                        min={0}
+                        max={videoDuration}
+                        step={0.1}
+                        value={videoTime}
+                        onChange={(e) => {
+                          const t = Number(e.target.value);
+                          setVideoTime(t);
+                          if (videoRef.current) videoRef.current.currentTime = t;
+                        }}
+                        className="flex-1 accent-[#FF0000] h-1.5 cursor-pointer"
+                      />
+                      <span className="text-[10px] text-[#5C5C5A] shrink-0 w-8 text-right">
+                        {Math.floor(videoDuration / 60)}:{String(Math.floor(videoDuration % 60)).padStart(2, "0")}
+                      </span>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={captureVideoFrame}
+                        className="flex-1 bg-[#FF0000] text-white border border-[#0A0A0A] px-2 py-1.5 text-xs font-bold shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_#0A0A0A] transition-all"
+                      >
+                        Capture frame
+                      </button>
+                      {thumbnailBlob && (
+                        <button
+                          onClick={() => { setThumbnailBlob(null); if (thumbnailPreview) URL.revokeObjectURL(thumbnailPreview); setThumbnailPreview(null); }}
+                          className="px-2 py-1.5 border border-[#0A0A0A] text-xs font-bold text-[#FF4F4F] shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-[1px_1px_0px_0px_#0A0A0A] transition-all"
+                        >
+                          Remove
+                        </button>
+                      )}
+                    </div>
+                    {thumbnailPreview && (
+                      <div className="mt-1">
+                        <div className="text-[10px] text-[#5C5C5A] mb-1">Thumbnail preview:</div>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img src={thumbnailPreview} alt="Thumbnail" className="w-full border border-[#0A0A0A]" />
+                      </div>
+                    )}
+                  </div>
+                )}
+              </>
             )}
 
             {/* File info */}
