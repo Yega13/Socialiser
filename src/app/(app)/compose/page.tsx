@@ -128,19 +128,47 @@ export default function ComposePage() {
         } else {
           const isVideo = mediaFile.type.startsWith("video/");
 
-          // Instagram API only accepts JPEG for images — convert if needed
+          // Convert to JPEG and fix aspect ratio for Instagram (4:5 to 1.91:1)
           let fileToUpload: File | Blob = mediaFile;
           let uploadName = mediaFile.name;
-          if (!isVideo && mediaFile.type !== "image/jpeg") {
-            setPostingStatus("Converting image to JPEG...");
-            const canvas = document.createElement("canvas");
+          if (!isVideo) {
+            setPostingStatus("Preparing image for Instagram...");
             const img = new Image();
             const blobUrl = URL.createObjectURL(mediaFile);
             await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
-            canvas.width = img.width;
-            canvas.height = img.height;
-            canvas.getContext("2d")!.drawImage(img, 0, 0);
             URL.revokeObjectURL(blobUrl);
+
+            let { width, height } = img;
+            const ratio = width / height;
+            const minRatio = 4 / 5;   // 0.8 — tallest allowed (portrait)
+            const maxRatio = 1.91;     // widest allowed (landscape)
+
+            // Crop to fit Instagram's aspect ratio by adding padding (letterbox)
+            const canvas = document.createElement("canvas");
+            let drawX = 0, drawY = 0;
+
+            if (ratio < minRatio) {
+              // Too tall — add horizontal padding
+              const newWidth = Math.ceil(height * minRatio);
+              canvas.width = newWidth;
+              canvas.height = height;
+              drawX = Math.floor((newWidth - width) / 2);
+            } else if (ratio > maxRatio) {
+              // Too wide — add vertical padding
+              const newHeight = Math.ceil(width / maxRatio);
+              canvas.width = width;
+              canvas.height = newHeight;
+              drawY = Math.floor((newHeight - height) / 2);
+            } else {
+              canvas.width = width;
+              canvas.height = height;
+            }
+
+            const ctx = canvas.getContext("2d")!;
+            ctx.fillStyle = "#FFFFFF";
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(img, drawX, drawY);
+
             const jpegBlob = await new Promise<Blob>((resolve) =>
               canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.92)
             );
