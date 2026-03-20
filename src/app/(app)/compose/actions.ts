@@ -42,19 +42,6 @@ export async function postToInstagramServer(
   isVideo: boolean
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Debug: verify token, user, and permissions
-    const debugRes = await fetch(
-      `https://graph.instagram.com/v21.0/me?fields=id,username,account_type&access_token=${accessToken}`
-    );
-    const debugData = await debugRes.json();
-    if (debugData.error) {
-      return { success: false, error: `Token invalid: ${debugData.error.message}` };
-    }
-    // Check if the user ID matches
-    if (debugData.id !== igUserId) {
-      return { success: false, error: `User ID mismatch: token is for ${debugData.id} (${debugData.username}) but DB has ${igUserId}. Reconnect Instagram.` };
-    }
-
     // Step 1: Create media container
     const containerParams: Record<string, string> = {
       caption,
