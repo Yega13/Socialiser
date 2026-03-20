@@ -55,7 +55,7 @@ async function postToYouTube(
   return { success: true };
 }
 
-async function prepareImageForInstagram(file: File, padColor: string): Promise<{ blob: Blob; name: string }> {
+async function prepareImageForInstagram(file: File, padColor: string, quality = 0.92): Promise<{ blob: Blob; name: string }> {
   const img = new Image();
   const blobUrl = URL.createObjectURL(file);
   await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
@@ -90,7 +90,7 @@ async function prepareImageForInstagram(file: File, padColor: string): Promise<{
   ctx.drawImage(img, drawX, drawY);
 
   const blob = await new Promise<Blob>((resolve) =>
-    canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.92)
+    canvas.toBlob((b) => resolve(b!), "image/jpeg", quality)
   );
   return { blob, name: file.name.replace(/\.[^.]+$/, ".jpg") };
 }
@@ -102,6 +102,7 @@ export default function ComposePage() {
   const [description, setDescription] = useState("");
   const [mediaItems, setMediaItems] = useState<MediaItem[]>([]);
   const [padColor, setPadColor] = useState("#FFFFFF");
+  const [imageQuality, setImageQuality] = useState(92);
   const [isPosting, setIsPosting] = useState(false);
   const [postingStatus, setPostingStatus] = useState("");
   const [results, setResults] = useState<Record<
@@ -231,7 +232,7 @@ export default function ComposePage() {
             let uploadName = item.file.name;
 
             if (!isVideo) {
-              const prepared = await prepareImageForInstagram(item.file, padColor);
+              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100);
               fileToUpload = prepared.blob;
               uploadName = prepared.name;
             }
@@ -292,6 +293,7 @@ export default function ComposePage() {
 
   const youtubeSelected = selected.includes("youtube");
   const instagramSelected = selected.includes("instagram");
+  const instagramConnected = connected.find((c) => c.platform === "instagram");
   const needsMedia = youtubeSelected || instagramSelected;
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const canPost =
@@ -378,21 +380,24 @@ export default function ComposePage() {
           </div>
         </div>
 
-        {/* Description (only for YouTube) */}
-        {youtubeSelected && (
-          <div>
-            <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
-              Description
-            </label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="Add a description..."
-              rows={4}
-              className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all resize-none"
-            />
-          </div>
-        )}
+        {/* Description / Links */}
+        <div>
+          <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+            Description / Links
+            <span className="font-normal text-[#5C5C5A] ml-2">
+              {instagramSelected ? "Added below caption on Instagram" : "Optional"}
+            </span>
+          </label>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder={instagramSelected
+              ? "Add links, hashtags, mentions...\ne.g. https://yoursite.com #hashtag @mention"
+              : "Add a description, links..."}
+            rows={3}
+            className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all resize-none"
+          />
+        </div>
 
         {/* Media upload */}
         {needsMedia && (
@@ -473,6 +478,31 @@ export default function ComposePage() {
           </div>
         )}
 
+        {/* Image quality */}
+        {instagramSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+          <div>
+            <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
+              Image quality
+              <span className="font-normal text-[#5C5C5A] ml-2">{imageQuality}%</span>
+            </label>
+            <div className="flex items-center gap-3">
+              <span className="text-xs text-[#5C5C5A] shrink-0">Low</span>
+              <input
+                type="range"
+                min={30}
+                max={100}
+                value={imageQuality}
+                onChange={(e) => setImageQuality(Number(e.target.value))}
+                className="flex-1 accent-[#0A0A0A] h-2 cursor-pointer"
+              />
+              <span className="text-xs text-[#5C5C5A] shrink-0">Max</span>
+            </div>
+            <div className="text-xs text-[#5C5C5A] mt-1">
+              {imageQuality >= 90 ? "Best quality, larger file" : imageQuality >= 60 ? "Good quality, moderate file size" : "Smaller file, some quality loss"}
+            </div>
+          </div>
+        )}
+
         {/* Results */}
         {results && (
           <div className="border border-[#0A0A0A] p-4 shadow-[4px_4px_0px_0px_#0A0A0A]">
@@ -519,60 +549,114 @@ export default function ComposePage() {
         )}
       </div>
 
-      {/* Right — media preview */}
+      {/* Right — Instagram-style preview */}
       {mediaItems.length > 0 && (
-        <div className="hidden md:block w-72 shrink-0">
+        <div className="hidden md:block w-80 shrink-0">
           <div className="sticky top-24 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="font-bold text-sm text-[#0A0A0A]">Preview</div>
-              {mediaItems.length > 1 && (
-                <div className="flex items-center gap-2">
+            <div className="font-bold text-sm text-[#0A0A0A]">Preview</div>
+
+            {/* Instagram post mockup */}
+            <div className="border border-[#DBDBDB] bg-white rounded-sm overflow-hidden">
+              {/* Header — avatar + username */}
+              <div className="flex items-center gap-2.5 px-3 py-2.5">
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FCAF45] via-[#E1306C] to-[#833AB4] flex items-center justify-center">
+                  <div className="w-7 h-7 rounded-full bg-white flex items-center justify-center text-[10px] font-bold text-[#262626]">
+                    {(instagramConnected?.platform_username ?? "you")[0].toUpperCase()}
+                  </div>
+                </div>
+                <span className="text-[13px] font-semibold text-[#262626]">
+                  {instagramConnected?.platform_username ?? "your_account"}
+                </span>
+              </div>
+
+              {/* Image area */}
+              <div className="relative bg-black aspect-square overflow-hidden">
+                {currentPreview?.file.type.startsWith("video/") ? (
+                  <video
+                    key={currentPreview.preview}
+                    src={currentPreview.preview}
+                    controls
+                    className="w-full h-full object-contain"
+                  />
+                ) : currentPreview ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={currentPreview.preview}
+                    alt="Preview"
+                    className="w-full h-full object-contain"
+                  />
+                ) : null}
+
+                {/* Carousel dots */}
+                {mediaItems.length > 1 && (
+                  <div className="absolute bottom-3 left-0 right-0 flex justify-center gap-1">
+                    {mediaItems.map((_, i) => (
+                      <button
+                        key={i}
+                        onClick={() => setPreviewIndex(i)}
+                        className={cn(
+                          "w-1.5 h-1.5 rounded-full transition-all",
+                          i === previewIndex ? "bg-[#0095F6] scale-125" : "bg-white/60"
+                        )}
+                      />
+                    ))}
+                  </div>
+                )}
+
+                {/* Carousel arrows */}
+                {mediaItems.length > 1 && previewIndex > 0 && (
                   <button
-                    onClick={() => setPreviewIndex((p) => Math.max(0, p - 1))}
-                    disabled={previewIndex === 0}
-                    className="w-7 h-7 border border-[#0A0A0A] bg-[#F9F9F7] font-black text-xs disabled:opacity-30 hover:enabled:bg-[#C8FF00] transition-colors"
+                    onClick={() => setPreviewIndex((p) => p - 1)}
+                    className="absolute left-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-[#262626] text-xs shadow-sm"
                   >
                     &lt;
                   </button>
-                  <span className="text-xs font-bold text-[#0A0A0A]">
-                    {previewIndex + 1}/{mediaItems.length}
-                  </span>
+                )}
+                {mediaItems.length > 1 && previewIndex < mediaItems.length - 1 && (
                   <button
-                    onClick={() => setPreviewIndex((p) => Math.min(mediaItems.length - 1, p + 1))}
-                    disabled={previewIndex === mediaItems.length - 1}
-                    className="w-7 h-7 border border-[#0A0A0A] bg-[#F9F9F7] font-black text-xs disabled:opacity-30 hover:enabled:bg-[#C8FF00] transition-colors"
+                    onClick={() => setPreviewIndex((p) => p + 1)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-full bg-white/80 flex items-center justify-center text-[#262626] text-xs shadow-sm"
                   >
                     &gt;
                   </button>
-                </div>
-              )}
+                )}
+              </div>
+
+              {/* Action icons */}
+              <div className="px-3 pt-2.5 pb-1 flex items-center gap-4">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#262626" strokeWidth="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+              </div>
+
+              {/* Caption preview */}
+              <div className="px-3 pb-3 pt-1">
+                <p className="text-[13px] text-[#262626] leading-[18px]">
+                  <span className="font-semibold">{instagramConnected?.platform_username ?? "your_account"}</span>{" "}
+                  <span className="whitespace-pre-wrap break-words">
+                    {title || "Your caption here..."}
+                    {description && (
+                      <>
+                        {"\n\n"}
+                        <span className="text-[#00376B]">{description}</span>
+                      </>
+                    )}
+                  </span>
+                </p>
+              </div>
             </div>
-            <div className="border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] overflow-hidden bg-[#0A0A0A]">
-              {currentPreview?.file.type.startsWith("video/") ? (
-                <video
-                  key={currentPreview.preview}
-                  src={currentPreview.preview}
-                  controls
-                  className="w-full"
-                />
-              ) : currentPreview ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={currentPreview.preview}
-                  alt="Preview"
-                  className="w-full"
-                />
-              ) : null}
-            </div>
+
+            {/* File info */}
             {currentPreview && (
-              <div className="text-xs text-[#5C5C5A] space-y-1">
-                <div className="truncate">{currentPreview.file.name}</div>
-                <div>{(currentPreview.file.size / 1024 / 1024).toFixed(1)} MB</div>
+              <div className="text-xs text-[#5C5C5A] flex items-center gap-2">
+                <span className="truncate">{currentPreview.file.name}</span>
+                <span className="shrink-0">({(currentPreview.file.size / 1024 / 1024).toFixed(1)} MB)</span>
                 {currentPreview.needsPadding && instagramSelected && !currentPreview.file.type.startsWith("video/") && (
-                  <div className="text-[#FF4F4F] font-bold">Padding will be added for Instagram</div>
+                  <span className="text-[#FF4F4F] font-bold shrink-0">+pad</span>
                 )}
               </div>
             )}
+
             {/* Thumbnail strip */}
             {mediaItems.length > 1 && (
               <div className="flex gap-1.5 overflow-x-auto pb-1">
