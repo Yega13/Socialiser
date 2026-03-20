@@ -43,29 +43,33 @@ export async function postToInstagramServer(
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Step 1: Create media container
-    const containerBody: Record<string, string> = { caption };
+    const containerParams: Record<string, string> = {
+      caption,
+      access_token: accessToken,
+    };
     if (isVideo) {
-      containerBody.media_type = "REELS";
-      containerBody.video_url = mediaUrl;
+      containerParams.media_type = "REELS";
+      containerParams.video_url = mediaUrl;
     } else {
-      containerBody.image_url = mediaUrl;
+      containerParams.image_url = mediaUrl;
     }
 
     const containerRes = await fetch(
       `https://graph.instagram.com/v21.0/${igUserId}/media`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify(containerBody),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams(containerParams),
       }
     );
     const containerData = await containerRes.json();
 
     if (!containerData.id) {
-      return { success: false, error: containerData.error?.message ?? `Container failed: ${JSON.stringify(containerData)}` };
+      return {
+        success: false,
+        error: containerData.error?.message
+          ?? `Container failed (${containerRes.status}): ${JSON.stringify(containerData)}`,
+      };
     }
 
     const containerId = containerData.id;
@@ -75,8 +79,7 @@ export async function postToInstagramServer(
       for (let i = 0; i < 30; i++) {
         await new Promise((r) => setTimeout(r, 3000));
         const statusRes = await fetch(
-          `https://graph.instagram.com/v21.0/${containerId}?fields=status_code`,
-          { headers: { Authorization: `Bearer ${accessToken}` } }
+          `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
         );
         const statusData = await statusRes.json();
         if (statusData.status_code === "FINISHED") break;
@@ -91,17 +94,21 @@ export async function postToInstagramServer(
       `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ creation_id: containerId }),
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          creation_id: containerId,
+          access_token: accessToken,
+        }),
       }
     );
     const publishData = await publishRes.json();
 
     if (!publishData.id) {
-      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
+      return {
+        success: false,
+        error: publishData.error?.message
+          ?? `Publish failed (${publishRes.status}): ${JSON.stringify(publishData)}`,
+      };
     }
 
     return { success: true };

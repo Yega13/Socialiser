@@ -42,89 +42,6 @@ async function postToYouTube(
   return { success: true };
 }
 
-async function postToInstagram(
-  accessToken: string,
-  igUserId: string,
-  caption: string,
-  mediaUrl: string,
-  isVideo: boolean
-): Promise<{ success: boolean; error?: string }> {
-  // Step 1: Create media container
-  const containerBody: Record<string, string> = { caption };
-
-  if (isVideo) {
-    containerBody.media_type = "REELS";
-    containerBody.video_url = mediaUrl;
-  } else {
-    containerBody.image_url = mediaUrl;
-  }
-
-  let containerData;
-  try {
-    const containerRes = await fetch(
-      `https://graph.instagram.com/v21.0/${igUserId}/media`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify(containerBody),
-      }
-    );
-    containerData = await containerRes.json();
-  } catch (err) {
-    return { success: false, error: `Container request failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
-
-  if (!containerData.id) {
-    return { success: false, error: containerData.error?.message ?? `Container failed: ${JSON.stringify(containerData)}` };
-  }
-
-  const containerId = containerData.id;
-
-  // Step 2: For videos, poll until container is ready
-  if (isVideo) {
-    for (let i = 0; i < 30; i++) {
-      await new Promise((r) => setTimeout(r, 3000));
-      const statusRes = await fetch(
-        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code`,
-        { headers: { Authorization: `Bearer ${accessToken}` } }
-      );
-      const statusData = await statusRes.json();
-      if (statusData.status_code === "FINISHED") break;
-      if (statusData.status_code === "ERROR") {
-        return { success: false, error: "Instagram video processing failed" };
-      }
-    }
-  }
-
-  // Step 3: Publish
-  let publishData;
-  try {
-    const publishRes = await fetch(
-      `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${accessToken}`,
-        },
-        body: JSON.stringify({ creation_id: containerId }),
-      }
-    );
-    publishData = await publishRes.json();
-  } catch (err) {
-    return { success: false, error: `Publish request failed: ${err instanceof Error ? err.message : String(err)}` };
-  }
-
-  if (!publishData.id) {
-    return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
-  }
-
-  return { success: true };
-}
-
 export default function ComposePage() {
   const [connected, setConnected] = useState<ConnectedPlatform[]>([]);
   const [selected, setSelected] = useState<string[]>([]);
@@ -211,7 +128,6 @@ export default function ComposePage() {
         } else {
           const isVideo = mediaFile.type.startsWith("video/");
 
-          // Upload media to Supabase Storage (public bucket)
           setPostingStatus("Uploading media...");
           const fileName = `instagram/${Date.now()}-${mediaFile.name}`;
           const { error: uploadError } = await supabase.storage
@@ -222,14 +138,13 @@ export default function ComposePage() {
             postResults[platformId] = { success: false, error: `Upload failed: ${uploadError.message}` };
           } else {
             const { data: urlData } = supabase.storage.from("media").getPublicUrl(fileName);
-            const publicUrl = urlData.publicUrl;
 
             setPostingStatus(isVideo ? "Publishing reel (this may take a minute)..." : "Publishing to Instagram...");
             postResults[platformId] = await postToInstagramServer(
               accessToken,
               conn.platform_user_id,
               `${title}${description ? "\n\n" + description : ""}`,
-              publicUrl,
+              urlData.publicUrl,
               isVideo
             );
           }
@@ -260,8 +175,6 @@ export default function ComposePage() {
 
   const acceptTypes = youtubeSelected && !instagramSelected
     ? "video/*"
-    : instagramSelected && !youtubeSelected
-    ? "image/*,video/*"
     : "image/*,video/*";
 
   return (
