@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
-    "build:cloudflare": "opennextjs-cloudflare build",
-    "preview": "opennextjs-cloudflare build && opennextjs-cloudflare preview",
-    "deploy": "opennextjs-cloudflare build && wrangler deploy",
+    "build": "next build --webpack",
+    "build:cloudflare": "next build --webpack && SKIP_NEXT_APP_BUILD=true opennextjs-cloudflare build",
+    "preview": "next build --webpack && SKIP_NEXT_APP_BUILD=true opennextjs-cloudflare build && opennextjs-cloudflare preview",
+    "deploy": "next build --webpack && SKIP_NEXT_APP_BUILD=true opennextjs-cloudflare build && wrangler deploy",
     "start": "next start",
     "lint": "eslint"
   },
