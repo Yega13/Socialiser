@@ -79,18 +79,16 @@ export async function postToInstagramServer(
 
     const containerId = containerData.id;
 
-    // Step 2: For videos, poll until container is ready
-    if (isVideo) {
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const statusRes = await fetch(
-          `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
-        );
-        const statusData = await statusRes.json();
-        if (statusData.status_code === "FINISHED") break;
-        if (statusData.status_code === "ERROR") {
-          return { success: false, error: "Instagram video processing failed" };
-        }
+    // Step 2: Poll until container is ready (images and videos)
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const statusRes = await fetch(
+        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
+      );
+      const statusData = await statusRes.json();
+      if (statusData.status_code === "FINISHED") break;
+      if (statusData.status_code === "ERROR") {
+        return { success: false, error: "Instagram media processing failed" };
       }
     }
 
