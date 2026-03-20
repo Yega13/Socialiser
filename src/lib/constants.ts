@@ -71,6 +71,22 @@ export const PLATFORMS = [
     color: "#0077FF",
     comingSoon: true,
   },
+  {
+    id: "snapchat",
+    name: "Snapchat",
+    description: "Share snaps & stories",
+    icon: "SC",
+    color: "#FFFC00",
+    comingSoon: true,
+  },
+  {
+    id: "pinterest",
+    name: "Pinterest",
+    description: "Pin images & ideas",
+    icon: "P",
+    color: "#E60023",
+    comingSoon: true,
+  },
 ] as const;
 
 export type Platform = (typeof PLATFORMS)[number];

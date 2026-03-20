@@ -859,26 +859,20 @@ export default function ComposePage() {
 
         {/* Content policy */}
         {!results && (
-          <div className="border border-[#0A0A0A] p-3 shadow-[2px_2px_0px_0px_#0A0A0A] space-y-2">
-            <div className="font-bold text-xs text-[#0A0A0A]">Content Policy</div>
-            <p className="text-[10px] text-[#5C5C5A] leading-relaxed">
-              You must not post content that includes: violence or terrorism, sexual or explicit material,
-              hate speech or discrimination, harassment or bullying, self-harm promotion,
-              illegal activities, spam or misleading content, or content that violates intellectual property rights.
-              Violations may result in account suspension.
-            </p>
-            <label className="flex items-start gap-2 cursor-pointer select-none">
-              <input
-                type="checkbox"
-                checked={policyAccepted}
-                onChange={(e) => setPolicyAccepted(e.target.checked)}
-                className="w-4 h-4 accent-[#0A0A0A] cursor-pointer mt-0.5 shrink-0"
-              />
-              <span className="text-xs text-[#0A0A0A]">
-                I confirm this content complies with platform guidelines and applicable laws
-              </span>
-            </label>
-          </div>
+          <label className="flex items-start gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={policyAccepted}
+              onChange={(e) => setPolicyAccepted(e.target.checked)}
+              className="w-4 h-4 accent-[#0A0A0A] cursor-pointer mt-0.5 shrink-0"
+            />
+            <span className="text-xs text-[#5C5C5A]">
+              I agree to the{" "}
+              <a href="/content-policy" target="_blank" className="text-[#7C3AED] font-bold hover:underline">
+                Content Policy
+              </a>
+            </span>
+          </label>
         )}
 
         {/* Schedule & Post */}
@@ -994,7 +988,7 @@ export default function ComposePage() {
                   <div
                     ref={previewRef}
                     className={cn(
-                      "relative bg-black overflow-hidden select-none",
+                      "relative overflow-hidden select-none",
                       canDrag && "cursor-grab",
                       canDrag && isDragging && "cursor-grabbing"
                     )}
@@ -1003,6 +997,7 @@ export default function ComposePage() {
                         : aspectMode === "portrait" ? "4/5"
                         : aspectMode === "landscape" ? "1.91/1"
                         : "1/1",
+                      backgroundColor: aspectMode === "original" ? padColor : "#000000",
                     }}
                     onMouseDown={(e) => { e.preventDefault(); handleDragStart(e.clientX, e.clientY); }}
                     onTouchStart={(e) => handleDragStart(e.touches[0].clientX, e.touches[0].clientY)}
