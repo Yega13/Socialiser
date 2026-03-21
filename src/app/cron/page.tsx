@@ -77,7 +77,7 @@ async function waitForContainer(
   accessToken: string,
   containerId: string
 ): Promise<string | null> {
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 90; i++) {
     await new Promise((r) => setTimeout(r, 2000));
     const res = await fetch(
       `https://graph.instagram.com/v21.0/${containerId}?fields=status_code,status&access_token=${accessToken}`
@@ -88,7 +88,7 @@ async function waitForContainer(
       return `Media processing failed${data.status ? `: ${data.status}` : ""}`;
     if (data.status_code === "EXPIRED") return "Media container expired";
   }
-  return "Media processing timed out (60s)";
+  return "Media processing timed out (3min)";
 }
 
 async function postToInstagram(
