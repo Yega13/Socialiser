@@ -219,8 +219,9 @@ export default async function CronPage({
   if (!key || key !== process.env.CRON_SECRET) {
     return (
       <p>
-        Unauthorized. Key provided: {key ? "yes" : "no"}.
-        Secret configured: {process.env.CRON_SECRET ? "yes" : "no"}.
+        Unauthorized. Key length: {key?.length ?? 0}.
+        Secret length: {process.env.CRON_SECRET?.length ?? 0}.
+        First 3 match: {key && process.env.CRON_SECRET ? (key.slice(0, 3) === process.env.CRON_SECRET.slice(0, 3) ? "yes" : "no") : "?"}.
       </p>
     );
   }
