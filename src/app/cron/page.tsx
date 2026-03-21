@@ -178,6 +178,10 @@ async function postCarouselToInstagram(
     );
     if (!carouselContainer.id)
       return { success: false, error: carouselContainer.error };
+    // Wait for carousel container to be ready before publishing
+    const carouselWaitErr = await waitForContainer(accessToken, carouselContainer.id);
+    if (carouselWaitErr)
+      return { success: false, error: `Carousel: ${carouselWaitErr}` };
     const publishRes = await fetch(
       `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
       {
