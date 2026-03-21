@@ -217,13 +217,7 @@ export default async function CronPage({
   const { key } = await searchParams;
 
   if (!key || key !== process.env.CRON_SECRET) {
-    return (
-      <p>
-        Unauthorized. Key length: {key?.length ?? 0}.
-        Secret length: {process.env.CRON_SECRET?.length ?? 0}.
-        First 3 match: {key && process.env.CRON_SECRET ? (key.slice(0, 3) === process.env.CRON_SECRET.slice(0, 3) ? "yes" : "no") : "?"}.
-      </p>
-    );
+    return <p>Unauthorized</p>;
   }
 
   const supabase = createClient(
