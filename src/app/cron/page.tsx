@@ -1,23 +1,213 @@
 import { createClient } from "@supabase/supabase-js";
-import {
-  refreshYouTubeToken,
-  refreshInstagramToken,
-  postToInstagramServer,
-  postCarouselToInstagram,
-} from "@/app/(app)/compose/actions";
 
-// This is a PAGE (not a route handler) so it works on Cloudflare Workers.
-// An external cron service hits this URL every ~5 minutes with the secret key.
-// e.g. https://socialiser.yeganyansuren13.workers.dev/cron?key=YOUR_SECRET
+// Fully self-contained cron page — no imports from "use server" files.
+// An external cron service hits this URL every minute with the secret key.
 
 export const dynamic = "force-dynamic";
 
-function getAdminClient() {
-  return createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+// ── Helper functions (inlined to avoid "use server" import issues on CF Workers) ──
+
+async function refreshYouTubeToken(
+  refreshToken: string
+): Promise<string | null> {
+  const res = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      refresh_token: refreshToken,
+      client_id: process.env.GOOGLE_CLIENT_ID ?? "",
+      client_secret: process.env.GOOGLE_CLIENT_SECRET ?? "",
+      grant_type: "refresh_token",
+    }),
+  });
+  const data = await res.json();
+  return data.access_token ?? null;
 }
+
+async function refreshInstagramToken(
+  currentToken: string
+): Promise<{ access_token: string; expires_in: number } | null> {
+  const res = await fetch(
+    `https://graph.instagram.com/refresh_access_token?` +
+      new URLSearchParams({
+        grant_type: "ig_refresh_token",
+        access_token: currentToken,
+      })
+  );
+  const data = await res.json();
+  if (data.access_token) {
+    return {
+      access_token: data.access_token,
+      expires_in: data.expires_in ?? 5184000,
+    };
+  }
+  return null;
+}
+
+async function createIgContainer(
+  accessToken: string,
+  igUserId: string,
+  params: Record<string, string>
+): Promise<{ id?: string; error?: string }> {
+  const res = await fetch(
+    `https://graph.instagram.com/v21.0/${igUserId}/media`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...params, access_token: accessToken }),
+    }
+  );
+  const text = await res.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    return { error: `API non-JSON (${res.status}): ${text.slice(0, 200)}` };
+  }
+  if (!data.id) {
+    const detail = data.error
+      ? `[${data.error.code}] ${data.error.message}`
+      : JSON.stringify(data);
+    return { error: `Container failed (${res.status}): ${detail}` };
+  }
+  return { id: data.id };
+}
+
+async function waitForContainer(
+  accessToken: string,
+  containerId: string
+): Promise<string | null> {
+  for (let i = 0; i < 30; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const res = await fetch(
+      `https://graph.instagram.com/v21.0/${containerId}?fields=status_code,status&access_token=${accessToken}`
+    );
+    const data = await res.json();
+    if (data.status_code === "FINISHED") return null;
+    if (data.status_code === "ERROR")
+      return `Media processing failed${data.status ? `: ${data.status}` : ""}`;
+    if (data.status_code === "EXPIRED") return "Media container expired";
+  }
+  return "Media processing timed out (60s)";
+}
+
+async function postToInstagram(
+  accessToken: string,
+  igUserId: string,
+  caption: string,
+  mediaUrl: string,
+  isVideo: boolean
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const params: Record<string, string> = { caption };
+    if (isVideo) {
+      params.media_type = "REELS";
+      params.video_url = mediaUrl;
+    } else {
+      params.image_url = mediaUrl;
+    }
+    const container = await createIgContainer(accessToken, igUserId, params);
+    if (!container.id) return { success: false, error: container.error };
+    const waitErr = await waitForContainer(accessToken, container.id);
+    if (waitErr) return { success: false, error: waitErr };
+    const publishRes = await fetch(
+      `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          creation_id: container.id,
+          access_token: accessToken,
+        }),
+      }
+    );
+    const publishData = await publishRes.json();
+    if (!publishData.id) {
+      return {
+        success: false,
+        error:
+          publishData.error?.message ??
+          `Publish failed: ${JSON.stringify(publishData)}`,
+      };
+    }
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+async function postCarouselToInstagram(
+  accessToken: string,
+  igUserId: string,
+  caption: string,
+  items: { url: string; isVideo: boolean }[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (items.length < 2 || items.length > 10) {
+      return { success: false, error: "Carousel requires 2-10 items" };
+    }
+    const childIds: string[] = [];
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+      const params: Record<string, string> = { is_carousel_item: "true" };
+      if (item.isVideo) {
+        params.media_type = "VIDEO";
+        params.video_url = item.url;
+      } else {
+        params.image_url = item.url;
+      }
+      const container = await createIgContainer(accessToken, igUserId, params);
+      if (!container.id)
+        return { success: false, error: `Item ${i + 1}: ${container.error}` };
+      const waitErr = await waitForContainer(accessToken, container.id);
+      if (waitErr)
+        return { success: false, error: `Item ${i + 1}: ${waitErr}` };
+      childIds.push(container.id);
+    }
+    const carouselContainer = await createIgContainer(
+      accessToken,
+      igUserId,
+      {
+        media_type: "CAROUSEL",
+        caption,
+        children: childIds.join(","),
+      }
+    );
+    if (!carouselContainer.id)
+      return { success: false, error: carouselContainer.error };
+    const publishRes = await fetch(
+      `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          creation_id: carouselContainer.id,
+          access_token: accessToken,
+        }),
+      }
+    );
+    const publishData = await publishRes.json();
+    if (!publishData.id) {
+      return {
+        success: false,
+        error:
+          publishData.error?.message ??
+          `Publish failed: ${JSON.stringify(publishData)}`,
+      };
+    }
+    return { success: true };
+  } catch (err) {
+    return {
+      success: false,
+      error: err instanceof Error ? err.message : String(err),
+    };
+  }
+}
+
+// ── Main cron page ──────────────────────────────────────────────
 
 export default async function CronPage({
   searchParams,
@@ -30,7 +220,10 @@ export default async function CronPage({
     return <p>Unauthorized</p>;
   }
 
-  const supabase = getAdminClient();
+  const supabase = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
 
   // Reset any stuck "processing" posts back to pending
   await supabase
@@ -278,7 +471,7 @@ export default async function CronPage({
         }
 
         if (items.length === 1) {
-          results[platformId] = await postToInstagramServer(
+          results[platformId] = await postToInstagram(
             accessToken,
             conn.platform_user_id,
             caption,
