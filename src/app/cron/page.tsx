@@ -347,7 +347,7 @@ export default async function CronPage({
           if (pathMatch) {
             const { data: signedData } = await supabase.storage
               .from("media")
-              .createSignedUrl(pathMatch[1], 3600);
+              .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
             if (signedData?.signedUrl) fetchUrl = signedData.signedUrl;
           }
 
@@ -402,7 +402,7 @@ export default async function CronPage({
               if (thumbPathMatch) {
                 const { data: sd } = await supabase.storage
                   .from("media")
-                  .createSignedUrl(thumbPathMatch[1], 3600);
+                  .createSignedUrl(decodeURIComponent(thumbPathMatch[1]), 3600);
                 if (sd?.signedUrl) thumbFetchUrl = sd.signedUrl;
               }
               const thumbRes = await fetch(thumbFetchUrl);
@@ -450,7 +450,7 @@ export default async function CronPage({
 
         const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
 
-        // Use public URLs directly — signed URLs from admin client cause processing issues
+        // Convert public URLs to signed URLs so Instagram can access private bucket
         const items: { url: string; isVideo: boolean }[] = [];
         for (let i = 0; i < (post.media_urls as string[]).length; i++) {
           const publicUrl = (post.media_urls as string[])[i];
@@ -458,7 +458,21 @@ export default async function CronPage({
             (post.media_types as string[] | null)?.[i]?.startsWith(
               "video/"
             ) ?? false;
-          items.push({ url: publicUrl, isVideo });
+          const pathMatch = publicUrl.match(
+            /\/storage\/v1\/object\/public\/media\/(.+)$/
+          );
+          if (pathMatch) {
+            const decodedPath = decodeURIComponent(pathMatch[1]);
+            const { data: signedData } = await supabase.storage
+              .from("media")
+              .createSignedUrl(decodedPath, 3600);
+            items.push({
+              url: signedData?.signedUrl || publicUrl,
+              isVideo,
+            });
+          } else {
+            items.push({ url: publicUrl, isVideo });
+          }
         }
 
         if (items.length === 1) {
