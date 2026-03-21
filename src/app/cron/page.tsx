@@ -450,7 +450,7 @@ export default async function CronPage({
 
         const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
 
-        // Convert public URLs to signed URLs
+        // Use public URLs directly — signed URLs from admin client cause processing issues
         const items: { url: string; isVideo: boolean }[] = [];
         for (let i = 0; i < (post.media_urls as string[]).length; i++) {
           const publicUrl = (post.media_urls as string[])[i];
@@ -458,20 +458,7 @@ export default async function CronPage({
             (post.media_types as string[] | null)?.[i]?.startsWith(
               "video/"
             ) ?? false;
-          const pathMatch = publicUrl.match(
-            /\/storage\/v1\/object\/public\/media\/(.+)$/
-          );
-          if (pathMatch) {
-            const { data: signedData } = await supabase.storage
-              .from("media")
-              .createSignedUrl(pathMatch[1], 3600);
-            items.push({
-              url: signedData?.signedUrl || publicUrl,
-              isVideo,
-            });
-          } else {
-            items.push({ url: publicUrl, isVideo });
-          }
+          items.push({ url: publicUrl, isVideo });
         }
 
         if (items.length === 1) {
