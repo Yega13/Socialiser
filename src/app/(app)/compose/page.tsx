@@ -608,6 +608,11 @@ export default function ComposePage() {
               })}
             </div>
           )}
+          {youtubeSelected && mediaItems.length > 0 && mediaItems.some((m) => !m.file.type.startsWith("video/")) && (
+            <p className="text-xs text-[#FF4F4F] font-bold mt-2">
+              YouTube only supports videos — photos will be skipped on YouTube.
+            </p>
+          )}
         </div>
 
         {/* Title */}
