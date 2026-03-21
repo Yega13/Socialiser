@@ -267,7 +267,18 @@ export async function processScheduledPosts(): Promise<{ processed: number }> {
           continue;
         }
         try {
-          const videoRes = await fetch(post.media_urls[videoIndex]);
+          const videoUrl = post.media_urls[videoIndex];
+          // Generate signed URL for video
+          const pathMatch = videoUrl.match(/\/storage\/v1\/object\/public\/media\/(.+)$/);
+          let fetchUrl = videoUrl;
+          if (pathMatch) {
+            const { data: signedData } = await supabase.storage
+              .from("media")
+              .createSignedUrl(pathMatch[1], 3600);
+            if (signedData?.signedUrl) fetchUrl = signedData.signedUrl;
+          }
+
+          const videoRes = await fetch(fetchUrl);
           if (!videoRes.ok) {
             results[platformId] = { success: false, error: "Failed to fetch video from storage" };
             continue;
@@ -295,7 +306,16 @@ export async function processScheduledPosts(): Promise<{ processed: number }> {
           } else {
             const ytData = await ytRes.json();
             if (post.thumbnail_url && ytData.id) {
-              const thumbRes = await fetch(post.thumbnail_url);
+              // Generate signed URL for thumbnail
+              const thumbPathMatch = post.thumbnail_url.match(/\/storage\/v1\/object\/public\/media\/(.+)$/);
+              let thumbFetchUrl = post.thumbnail_url;
+              if (thumbPathMatch) {
+                const { data: sd } = await supabase.storage
+                  .from("media")
+                  .createSignedUrl(thumbPathMatch[1], 3600);
+                if (sd?.signedUrl) thumbFetchUrl = sd.signedUrl;
+              }
+              const thumbRes = await fetch(thumbFetchUrl);
               if (thumbRes.ok) {
                 const thumbBlob = await thumbRes.blob();
                 await fetch(
@@ -365,4 +385,24 @@ export async function processScheduledPosts(): Promise<{ processed: number }> {
   }
 
   return { processed: posts.length };
+}
+
+// ── Retry a failed scheduled post ────────────────────────────────
+
+export async function retryScheduledPost(
+  postId: string
+): Promise<{ success: boolean }> {
+  const supabase = await createServerClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return { success: false };
+
+  const { error } = await supabase
+    .from("scheduled_posts")
+    .update({ status: "pending", results: null })
+    .eq("id", postId)
+    .eq("user_id", user.id);
+
+  return { success: !error };
 }

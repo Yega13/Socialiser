@@ -7,6 +7,7 @@ import {
   refreshInstagramToken,
   postToInstagramServer,
   postCarouselToInstagram,
+  retryScheduledPost,
 } from "@/app/(app)/compose/actions";
 import { cn } from "@/lib/utils";
 
@@ -339,9 +340,20 @@ export default function ScheduledPage() {
     return processedCount;
   }, []);
 
-  // On mount: process overdue posts, then load
+  // On mount: reset stuck posts, process overdue, then load
   useEffect(() => {
     async function init() {
+      // Reset any stuck "processing" posts back to pending
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        await supabase
+          .from("scheduled_posts")
+          .update({ status: "pending" })
+          .eq("user_id", user.id)
+          .eq("status", "processing");
+      }
+
       setProcessing(true);
       try {
         await processOverduePosts();
@@ -377,6 +389,21 @@ export default function ScheduledPage() {
     if (ids.length === 0) return;
     await supabase.from("scheduled_posts").delete().in("id", ids);
     setPosts((prev) => prev.filter((p) => !ids.includes(p.id)));
+  }
+
+  async function retryPost(id: string) {
+    const { success } = await retryScheduledPost(id);
+    if (!success) return;
+    // Reload then process the now-pending post
+    await loadPosts();
+    setProcessing(true);
+    try {
+      await processOverduePosts();
+    } catch {
+      // ignore
+    }
+    await loadPosts();
+    setProcessing(false);
   }
 
   const pending = posts.filter((p) => p.status === "pending");
@@ -501,6 +528,7 @@ export default function ScheduledPage() {
                     key={post.id}
                     post={post}
                     onDelete={() => deletePost(post.id)}
+                    onRetry={() => retryPost(post.id)}
                   />
                 ))}
               </div>
@@ -515,9 +543,11 @@ export default function ScheduledPage() {
 function PostCard({
   post,
   onDelete,
+  onRetry,
 }: {
   post: ScheduledPost;
   onDelete?: () => void;
+  onRetry?: () => void;
 }) {
   const scheduledDate = new Date(post.scheduled_at);
   const isPast = scheduledDate <= new Date();
@@ -602,6 +632,18 @@ function PostCard({
               ? "OVERDUE"
               : post.status.toUpperCase()}
           </span>
+          {onRetry && (
+            <button
+              onClick={onRetry}
+              className="p-1.5 text-[#7C3AED] hover:bg-[#7C3AED]/10 transition-colors"
+              title="Retry post"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
+                <path d="M1 4v6h6" />
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10" />
+              </svg>
+            </button>
+          )}
           {onDelete && (
             <button
               onClick={onDelete}
