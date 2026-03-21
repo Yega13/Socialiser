@@ -177,7 +177,7 @@ export default function ScheduledPage() {
             if (pathMatch) {
               const { data: signedData } = await supabase.storage
                 .from("media")
-                .createSignedUrl(pathMatch[1], 3600);
+                .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
               if (signedData?.signedUrl) fetchUrl = signedData.signedUrl;
             }
 
@@ -232,7 +232,7 @@ export default function ScheduledPage() {
                 if (thumbPathMatch) {
                   const { data: sd } = await supabase.storage
                     .from("media")
-                    .createSignedUrl(thumbPathMatch[1], 3600);
+                    .createSignedUrl(decodeURIComponent(thumbPathMatch[1]), 3600);
                   if (sd?.signedUrl) thumbFetchUrl = sd.signedUrl;
                 }
                 const thumbRes = await fetch(thumbFetchUrl);
@@ -295,7 +295,7 @@ export default function ScheduledPage() {
             if (pathMatch) {
               const { data: signedData } = await supabase.storage
                 .from("media")
-                .createSignedUrl(pathMatch[1], 3600);
+                .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
               items.push({
                 url: signedData?.signedUrl || publicUrl,
                 isVideo,
