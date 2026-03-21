@@ -216,8 +216,12 @@ export default async function CronPage({
 }) {
   const { key } = await searchParams;
 
-  if (!key || key !== process.env.CRON_SECRET) {
-    return <p>Unauthorized. Your key: {key?.length ?? 0} chars. Secret: {process.env.CRON_SECRET?.length ?? 0} chars.</p>;
+  // Use bracket notation to read runtime value from wrangler.toml [vars],
+  // not the build-time inlined value from GitHub secrets
+  const envName = "CRON_SECRET";
+  const secret = process.env[envName];
+  if (!key || key !== secret) {
+    return <p>Unauthorized</p>;
   }
 
   const supabase = createClient(

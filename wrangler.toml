@@ -7,6 +7,9 @@ compatibility_flags = ["nodejs_compat", "global_fetch_strictly_public"]
 directory = ".open-next/assets"
 binding = "ASSETS"
 
+[vars]
+CRON_SECRET = "socialiser-cron-2026"
+
 [[services]]
 binding = "WORKER_SELF_REFERENCE"
 service = "socialiser"
