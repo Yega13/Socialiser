@@ -224,9 +224,16 @@ export default async function CronPage({
     return <p>Unauthorized</p>;
   }
 
+  // Admin client for DB operations (bypasses RLS)
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+
+  // Anon client for storage signed URLs (matches what browser client produces)
+  const anonClient = createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   );
 
   // Reset any stuck "processing" posts back to pending
@@ -345,7 +352,7 @@ export default async function CronPage({
           );
           let fetchUrl = videoUrl;
           if (pathMatch) {
-            const { data: signedData } = await supabase.storage
+            const { data: signedData } = await anonClient.storage
               .from("media")
               .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
             if (signedData?.signedUrl) fetchUrl = signedData.signedUrl;
@@ -400,7 +407,7 @@ export default async function CronPage({
               );
               let thumbFetchUrl = post.thumbnail_url;
               if (thumbPathMatch) {
-                const { data: sd } = await supabase.storage
+                const { data: sd } = await anonClient.storage
                   .from("media")
                   .createSignedUrl(decodeURIComponent(thumbPathMatch[1]), 3600);
                 if (sd?.signedUrl) thumbFetchUrl = sd.signedUrl;
@@ -463,7 +470,7 @@ export default async function CronPage({
           );
           if (pathMatch) {
             const decodedPath = decodeURIComponent(pathMatch[1]);
-            const { data: signedData } = await supabase.storage
+            const { data: signedData } = await anonClient.storage
               .from("media")
               .createSignedUrl(decodedPath, 3600);
             items.push({
