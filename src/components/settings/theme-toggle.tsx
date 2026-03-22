@@ -17,22 +17,16 @@ export function ThemeToggle() {
   }
 
   return (
-    <button
-      type="button"
-      onClick={toggle}
-      className="relative w-14 h-8 border border-[var(--color-base-black)] bg-[var(--color-base-100)] cursor-pointer transition-colors"
-      aria-label="Toggle theme"
-    >
-      <span
-        className="absolute top-1 left-1 w-6 h-6 bg-[var(--color-brand-lime)] border border-[var(--color-base-black)] transition-transform duration-200"
-        style={{ transform: dark ? "translateX(22px)" : "translateX(0)" }}
-      />
-      <span className="absolute left-1.5 top-1.5 text-xs leading-none select-none pointer-events-none">
-        {dark ? "" : "\u2600"}
-      </span>
-      <span className="absolute right-1.5 top-1.5 text-xs leading-none select-none pointer-events-none">
-        {dark ? "\u263E" : ""}
-      </span>
-    </button>
+    <div className="flex items-center gap-3">
+      <button
+        type="button"
+        onClick={toggle}
+        className="group flex items-center gap-2 px-4 py-2 border border-[var(--color-base-black)] shadow-[var(--shadow-hard)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_var(--color-base-black)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none transition-all cursor-pointer select-none font-semibold text-sm"
+        style={{ background: dark ? "#C8FF00" : "#0A0A0A", color: dark ? "#0A0A0A" : "#F9F9F7" }}
+      >
+        <span className="text-base">{dark ? "\u2600\uFE0F" : "\uD83C\uDF19"}</span>
+        {dark ? "Light mode" : "Dark mode"}
+      </button>
+    </div>
   );
 }

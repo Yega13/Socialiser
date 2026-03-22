@@ -33,24 +33,24 @@ export function MobileNav({ user, profile }: MobileNavProps) {
         aria-label="Toggle menu"
       >
         <span
-          className={`block h-0.5 w-5 bg-[#0A0A0A] transition-all duration-200 ${open ? "rotate-45 translate-y-2" : ""}`}
+          className={`block h-0.5 w-5 bg-[var(--color-base-black)] transition-all duration-200 ${open ? "rotate-45 translate-y-2" : ""}`}
         />
         <span
-          className={`block h-0.5 w-5 bg-[#0A0A0A] transition-all duration-200 ${open ? "opacity-0" : ""}`}
+          className={`block h-0.5 w-5 bg-[var(--color-base-black)] transition-all duration-200 ${open ? "opacity-0" : ""}`}
         />
         <span
-          className={`block h-0.5 w-5 bg-[#0A0A0A] transition-all duration-200 ${open ? "-rotate-45 -translate-y-2" : ""}`}
+          className={`block h-0.5 w-5 bg-[var(--color-base-black)] transition-all duration-200 ${open ? "-rotate-45 -translate-y-2" : ""}`}
         />
       </button>
 
       {open && (
-        <div className="absolute top-14 left-0 right-0 bg-[#F9F9F7] border-b border-[#0A0A0A] z-50 shadow-[0_4px_0px_0px_#0A0A0A]">
+        <div className="absolute top-14 left-0 right-0 bg-[var(--color-base-white)] border-b border-[var(--color-base-black)] z-50 shadow-[var(--shadow-hard)]">
           {user ? (
             <div className="flex flex-col">
               {profile && (
-                <div className="flex items-center gap-3 px-4 py-3 border-b border-[#EBEBEA]">
+                <div className="flex items-center gap-3 px-4 py-3 border-b border-[var(--color-base-200)]">
                   <Avatar src={profile.avatar_url} name={profile.full_name} size={32} />
-                  <span className="text-sm font-semibold text-[#0A0A0A]">
+                  <span className="text-sm font-semibold">
                     {profile.full_name ?? "My Account"}
                   </span>
                 </div>
@@ -58,21 +58,21 @@ export function MobileNav({ user, profile }: MobileNavProps) {
               <Link
                 href="/dashboard"
                 onClick={() => setOpen(false)}
-                className="px-4 py-3 text-sm font-medium text-[#0A0A0A] hover:bg-[#EBEBEA] border-b border-[#EBEBEA]"
+                className="px-4 py-3 text-sm font-medium hover:bg-[var(--color-base-100)] border-b border-[var(--color-base-200)]"
               >
                 Dashboard
               </Link>
               <Link
                 href="/settings"
                 onClick={() => setOpen(false)}
-                className="px-4 py-3 text-sm font-medium text-[#0A0A0A] hover:bg-[#EBEBEA] border-b border-[#EBEBEA]"
+                className="px-4 py-3 text-sm font-medium hover:bg-[var(--color-base-100)] border-b border-[var(--color-base-200)]"
               >
                 Settings
               </Link>
               <button
                 type="button"
                 onClick={handleSignOut}
-                className="px-4 py-3 text-sm font-medium text-[#FF4F4F] hover:bg-[#EBEBEA] text-left"
+                className="px-4 py-3 text-sm font-medium text-[var(--color-brand-coral)] hover:bg-[var(--color-base-100)] text-left"
               >
                 Sign out
               </button>
@@ -82,14 +82,14 @@ export function MobileNav({ user, profile }: MobileNavProps) {
               <Link
                 href="/login"
                 onClick={() => setOpen(false)}
-                className="px-4 py-3 text-sm font-medium text-[#0A0A0A] hover:bg-[#EBEBEA] border-b border-[#EBEBEA]"
+                className="px-4 py-3 text-sm font-medium hover:bg-[var(--color-base-100)] border-b border-[var(--color-base-200)]"
               >
                 Sign in
               </Link>
               <Link
                 href="/register"
                 onClick={() => setOpen(false)}
-                className="px-4 py-3 text-sm font-bold text-[#0A0A0A] hover:bg-[#C8FF00]"
+                className="px-4 py-3 text-sm font-bold hover:bg-[var(--color-brand-lime)]"
               >
                 Get started →
               </Link>

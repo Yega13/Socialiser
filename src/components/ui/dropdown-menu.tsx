@@ -44,13 +44,13 @@ export function DropdownMenu({ trigger, items, align = "right" }: DropdownMenuPr
       {open && (
         <div
           className={cn(
-            "absolute top-full mt-2 z-50 min-w-44 bg-[#F9F9F7] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A]",
+            "absolute top-full mt-2 z-50 min-w-44 bg-[var(--color-base-white)] border border-[var(--color-base-black)] shadow-[var(--shadow-hard)]",
             align === "right" ? "right-0" : "left-0"
           )}
         >
           {items.map((item, i) =>
             item.separator ? (
-              <div key={i} className="h-px bg-[#D4D4D2] my-1" />
+              <div key={i} className="h-px bg-[var(--color-base-200)] my-1" />
             ) : (
               <button
                 key={i}
@@ -60,8 +60,8 @@ export function DropdownMenu({ trigger, items, align = "right" }: DropdownMenuPr
                   setOpen(false);
                 }}
                 className={cn(
-                  "w-full text-left px-4 py-2 text-sm font-medium hover:bg-[#EBEBEA] transition-colors",
-                  item.danger ? "text-[#FF4F4F]" : "text-[#0A0A0A]"
+                  "w-full text-left px-4 py-2 text-sm font-medium hover:bg-[var(--color-base-100)] transition-colors",
+                  item.danger ? "text-[var(--color-brand-coral)]" : ""
                 )}
               >
                 {item.label}

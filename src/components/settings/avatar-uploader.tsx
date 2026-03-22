@@ -53,7 +53,7 @@ export function AvatarUploader({ userId, currentAvatarUrl, name, onUpload }: Ava
           className="group-hover:opacity-70 transition-opacity"
         />
         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-          <span className="text-xs font-bold text-[#0A0A0A] bg-[#C8FF00] px-1.5 py-0.5 border border-[#0A0A0A]">
+          <span className="text-xs font-bold text-[#0A0A0A] bg-[var(--color-brand-lime)] px-1.5 py-0.5 border border-[var(--color-base-black)]">
             {uploading ? "..." : "Edit"}
           </span>
         </div>
@@ -67,10 +67,10 @@ export function AvatarUploader({ userId, currentAvatarUrl, name, onUpload }: Ava
         onChange={handleFileChange}
       />
 
-      <p className="text-xs text-[#5C5C5A]">
+      <p className="text-xs text-[var(--color-base-600)]">
         {uploading ? "Uploading…" : "Click to upload. Max 5 MB."}
       </p>
-      {error && <p className="text-xs text-[#FF4F4F] font-medium">{error}</p>}
+      {error && <p className="text-xs text-[var(--color-brand-coral)] font-medium">{error}</p>}
     </div>
   );
 }

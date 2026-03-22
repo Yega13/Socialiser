@@ -34,13 +34,52 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* ── Dark mode overrides ────────────────────────── */
 html.dark {
-  --color-base-white: #0A0A0A;
-  --color-base-black: #F9F9F7;
-  --color-base-800: #D4D4D2;
-  --color-base-600: #A0A09E;
-  --color-base-200: #2A2A28;
-  --color-base-100: #1A1A18;
-  --shadow-hard: 4px 4px 0px 0px #3A3A38;
+  --color-base-white:   #0A0A0A;
+  --color-base-black:   #E8E8E6;
+  --color-base-800:     #C8C8C6;
+  --color-base-600:     #888886;
+  --color-base-200:     #1E1E1C;
+  --color-base-100:     #141412;
+  --shadow-hard:  4px 4px 0px 0px #333331;
   --shadow-brand: 4px 4px 0px 0px var(--color-brand-violet);
+}
+
+/* Force dark surfaces on common hardcoded values */
+html.dark body { background: #0A0A0A; color: #E8E8E6; }
+
+/* Override remaining hardcoded whites & blacks in Tailwind classes */
+html.dark .bg-\[\#F9F9F7\] { background-color: #0A0A0A !important; }
+html.dark .bg-\[\#EBEBEA\] { background-color: #1A1A18 !important; }
+html.dark .bg-white { background-color: #0A0A0A !important; }
+html.dark .text-\[\#0A0A0A\] { color: #E8E8E6 !important; }
+html.dark .text-\[\#5C5C5A\] { color: #888886 !important; }
+html.dark .border-\[\#0A0A0A\] { border-color: #333331 !important; }
+html.dark .border-\[\#EBEBEA\] { border-color: #1E1E1C !important; }
+html.dark .border-\[\#D4D4D2\] { border-color: #1E1E1C !important; }
+html.dark .shadow-\[4px_4px_0px_0px_\#0A0A0A\] { box-shadow: 4px 4px 0px 0px #333331 !important; }
+html.dark .shadow-\[2px_2px_0px_0px_\#0A0A0A\] { box-shadow: 2px 2px 0px 0px #333331 !important; }
+html.dark .shadow-\[0_4px_0px_0px_\#0A0A0A\] { box-shadow: 0 4px 0px 0px #333331 !important; }
+html.dark .hover\:bg-\[\#EBEBEA\]:hover { background-color: #1A1A18 !important; }
+html.dark .bg-\[\#0A0A0A\] { background-color: #E8E8E6 !important; }
+html.dark .bg-\[\#0A0A0A\].text-\[\#F9F9F7\] { color: #0A0A0A !important; }
+html.dark .text-\[\#F9F9F7\] { color: #0A0A0A !important; }
+
+/* Hamburger lines in mobile nav */
+html.dark .bg-\[\#0A0A0A\].block.h-0\.5 { background-color: #E8E8E6 !important; }
+
+/* Keep brand colors punchy — lime text always dark */
+html.dark .bg-\[\#C8FF00\] { background-color: #C8FF00 !important; }
+html.dark .bg-\[\#C8FF00\] .text-\[\#0A0A0A\],
+html.dark .text-\[\#0A0A0A\].bg-\[\#C8FF00\] { color: #0A0A0A !important; }
+
+/* Inputs in dark mode */
+html.dark input, html.dark textarea, html.dark select {
+  background-color: #141412 !important;
+  color: #E8E8E6 !important;
+  border-color: #333331 !important;
+}
+html.dark input::placeholder, html.dark textarea::placeholder {
+  color: #666664 !important;
 }

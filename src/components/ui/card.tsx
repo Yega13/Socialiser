@@ -9,9 +9,9 @@ export function Card({ className, variant = "default", ...props }: CardProps) {
   return (
     <div
       className={cn(
-        "bg-[#F9F9F7] border border-[#0A0A0A] p-6",
-        variant === "brand" && "shadow-[4px_4px_0px_0px_#7C3AED]",
-        variant === "default" && "shadow-[4px_4px_0px_0px_#0A0A0A]",
+        "bg-[var(--color-base-white)] border border-[var(--color-base-black)] p-6",
+        variant === "brand" && "shadow-[var(--shadow-brand)]",
+        variant === "default" && "shadow-[var(--shadow-hard)]",
         className
       )}
       {...props}
