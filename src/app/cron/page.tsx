@@ -77,18 +77,35 @@ async function waitForContainer(
   accessToken: string,
   containerId: string
 ): Promise<string | null> {
-  for (let i = 0; i < 90; i++) {
+  let lastStatus = "UNKNOWN";
+  let apiErrors = 0;
+  // 150 iterations × 2s = 5 minutes
+  for (let i = 0; i < 150; i++) {
     await new Promise((r) => setTimeout(r, 2000));
-    const res = await fetch(
-      `https://graph.instagram.com/v21.0/${containerId}?fields=status_code,status&access_token=${accessToken}`
-    );
-    const data = await res.json();
-    if (data.status_code === "FINISHED") return null;
-    if (data.status_code === "ERROR")
-      return `Media processing failed${data.status ? `: ${data.status}` : ""}`;
-    if (data.status_code === "EXPIRED") return "Media container expired";
+    try {
+      const res = await fetch(
+        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code,status&access_token=${accessToken}`
+      );
+      if (!res.ok) {
+        apiErrors++;
+        if (res.status === 429) await new Promise((r) => setTimeout(r, 5000));
+        continue;
+      }
+      const data = await res.json();
+      if (data.error) {
+        apiErrors++;
+        continue;
+      }
+      lastStatus = data.status_code || "UNKNOWN";
+      if (data.status_code === "FINISHED") return null;
+      if (data.status_code === "ERROR")
+        return `Media processing failed${data.status ? `: ${data.status}` : ""}`;
+      if (data.status_code === "EXPIRED") return "Media container expired";
+    } catch {
+      apiErrors++;
+    }
   }
-  return "Media processing timed out (3min)";
+  return `Media processing timed out (5min). Last status: ${lastStatus}, API errors: ${apiErrors}`;
 }
 
 async function postToInstagram(
