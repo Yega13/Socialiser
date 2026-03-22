@@ -286,22 +286,33 @@ export default async function CronPage({
   // Don't reset "processing" posts — a concurrent cron run may be working on them.
   // Users can retry stuck posts from the scheduled page.
 
-  // Get ALL pending overdue posts across ALL users
+  // Fetch posts due within the next 6 minutes (carousel videos need ~6 min head start)
+  const now = new Date();
+  const windowEnd = new Date(now.getTime() + 6 * 60 * 1000);
   const { data: posts, error: fetchErr } = await supabase
     .from("scheduled_posts")
     .select("*")
     .eq("status", "pending")
-    .lte("scheduled_at", new Date().toISOString())
+    .lte("scheduled_at", windowEnd.toISOString())
     .limit(10);
 
   if (fetchErr || !posts || posts.length === 0) {
     return <p>OK: 0 found. {fetchErr ? `Error: ${fetchErr.message}` : "No overdue posts."}</p>;
   }
 
-  const log: string[] = [`Found ${posts.length} overdue post(s)`];
+  const log: string[] = [`Found ${posts.length} post(s) due within 6 min`];
   let processed = 0;
 
   for (const post of posts) {
+    // Only start early for carousel posts with video (they need ~6 min to process)
+    // Everything else waits until the actual scheduled time
+    const hasVideo = (post.media_types as string[] | null)?.some((t: string) => t.startsWith("video/"));
+    const isCarouselWithVideo = (post.media_urls as string[] | null)?.length! > 1 && hasVideo;
+    const scheduledTime = new Date(post.scheduled_at).getTime();
+
+    if (!isCarouselWithVideo && scheduledTime > now.getTime()) {
+      continue; // Not a carousel with video, and not due yet — skip
+    }
     // Optimistic lock: only claim posts still in "pending" status
     // Prevents duplicate processing when cron runs overlap
     const { data: claimed } = await supabase
