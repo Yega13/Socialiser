@@ -283,11 +283,8 @@ export default async function CronPage({
     return stored;
   }
 
-  // Reset any stuck "processing" posts back to pending
-  await supabase
-    .from("scheduled_posts")
-    .update({ status: "pending" })
-    .eq("status", "processing");
+  // Don't reset "processing" posts — a concurrent cron run may be working on them.
+  // Users can retry stuck posts from the scheduled page.
 
   // Get ALL pending overdue posts across ALL users
   const { data: posts, error: fetchErr } = await supabase
@@ -305,10 +302,19 @@ export default async function CronPage({
   let processed = 0;
 
   for (const post of posts) {
-    await supabase
+    // Optimistic lock: only claim posts still in "pending" status
+    // Prevents duplicate processing when cron runs overlap
+    const { data: claimed } = await supabase
       .from("scheduled_posts")
       .update({ status: "processing" })
-      .eq("id", post.id);
+      .eq("id", post.id)
+      .eq("status", "pending")
+      .select("id");
+
+    if (!claimed || claimed.length === 0) {
+      log.push(`Post "${post.title}": skipped (already being processed)`);
+      continue;
+    }
 
     const { data: connectedPlatforms } = await supabase
       .from("connected_platforms")
