@@ -168,19 +168,8 @@ export async function postCarouselToInstagram(
       return { success: false, error: "Carousel requires 2-10 items" };
     }
 
-    // Verify all URLs are accessible first
-    for (let i = 0; i < items.length; i++) {
-      const check = await fetch(items[i].url, { method: "HEAD" });
-      if (!check.ok) {
-        return {
-          success: false,
-          error: `Item ${i + 1}: URL not accessible (${check.status}). Starts with: ${items[i].url.slice(0, 80)}...`,
-        };
-      }
-    }
-
-    // Step 1: Create a container for each item (no caption on children)
-    const childIds: string[] = [];
+    // Step 1: Create ALL child containers first (let Instagram process in parallel)
+    const containers: { id: string; index: number }[] = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const params: Record<string, string> = { is_carousel_item: "true" };
@@ -192,23 +181,29 @@ export async function postCarouselToInstagram(
       }
 
       const container = await createIgContainer(accessToken, igUserId, params);
-      if (!container.id) return { success: false, error: `Item ${i + 1}: ${container.error} | URL: ${item.url.slice(0, 80)}...` };
-
-      const waitErr = await waitForContainer(accessToken, container.id);
-      if (waitErr) return { success: false, error: `Item ${i + 1}: ${waitErr}` };
-
-      childIds.push(container.id);
+      if (!container.id) return { success: false, error: `Item ${i + 1}: ${container.error}` };
+      containers.push({ id: container.id, index: i });
     }
 
-    // Step 2: Create carousel container
+    // Step 2: Wait for ALL containers to finish processing
+    for (const c of containers) {
+      const waitErr = await waitForContainer(accessToken, c.id);
+      if (waitErr) return { success: false, error: `Item ${c.index + 1}: ${waitErr}` };
+    }
+
+    // Step 3: Create carousel container
     const carouselContainer = await createIgContainer(accessToken, igUserId, {
       media_type: "CAROUSEL",
       caption,
-      children: childIds.join(","),
+      children: containers.map((c) => c.id).join(","),
     });
     if (!carouselContainer.id) return { success: false, error: carouselContainer.error };
 
-    // Step 3: Publish
+    // Step 4: Wait for carousel container
+    const carouselWait = await waitForContainer(accessToken, carouselContainer.id);
+    if (carouselWait) return { success: false, error: `Carousel: ${carouselWait}` };
+
+    // Step 5: Publish
     const publishRes = await fetch(
       `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
       {

@@ -172,7 +172,8 @@ async function postCarouselToInstagram(
     if (items.length < 2 || items.length > 10) {
       return { success: false, error: "Carousel requires 2-10 items" };
     }
-    const childIds: string[] = [];
+    // Create ALL child containers first (let Instagram process in parallel)
+    const containers: { id: string; index: number }[] = [];
     for (let i = 0; i < items.length; i++) {
       const item = items[i];
       const params: Record<string, string> = { is_carousel_item: "true" };
@@ -185,10 +186,13 @@ async function postCarouselToInstagram(
       const container = await createIgContainer(accessToken, igUserId, params);
       if (!container.id)
         return { success: false, error: `Item ${i + 1}: ${container.error}` };
-      const waitErr = await waitForContainer(accessToken, container.id);
+      containers.push({ id: container.id, index: i });
+    }
+    // Wait for ALL containers to finish
+    for (const c of containers) {
+      const waitErr = await waitForContainer(accessToken, c.id);
       if (waitErr)
-        return { success: false, error: `Item ${i + 1}: ${waitErr}` };
-      childIds.push(container.id);
+        return { success: false, error: `Item ${c.index + 1}: ${waitErr}` };
     }
     const carouselContainer = await createIgContainer(
       accessToken,
@@ -196,7 +200,7 @@ async function postCarouselToInstagram(
       {
         media_type: "CAROUSEL",
         caption,
-        children: childIds.join(","),
+        children: containers.map((c) => c.id).join(","),
       }
     );
     if (!carouselContainer.id)
