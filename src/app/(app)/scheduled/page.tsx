@@ -51,6 +51,28 @@ export default function ScheduledPage() {
     setLoading(false);
   }, []);
 
+  // Helper: resolve stored value (path or legacy URL) to a signed URL
+  const resolveToSignedUrl = useCallback(async (supabase: ReturnType<typeof createClient>, stored: string): Promise<string> => {
+    // New format: just a file path like "scheduled/1234-image.jpg"
+    if (!stored.startsWith("http")) {
+      const { data } = await supabase.storage
+        .from("media")
+        .createSignedUrl(stored, 3600);
+      return data?.signedUrl || "";
+    }
+    // Legacy: full URL — extract path and create signed URL
+    const pathMatch = stored.match(
+      /\/storage\/v1\/object\/(?:public|sign)\/media\/([^?]+)/
+    );
+    if (pathMatch) {
+      const { data } = await supabase.storage
+        .from("media")
+        .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
+      return data?.signedUrl || stored;
+    }
+    return stored;
+  }, []);
+
   // Process overdue posts client-side using browser supabase client
   const processOverduePosts = useCallback(async () => {
     const supabase = createClient();
@@ -168,17 +190,10 @@ export default function ScheduledPage() {
           }
           try {
             setProcessingStatus("Uploading to YouTube...");
-            const videoUrl = post.media_urls[videoIndex];
-            // Generate signed URL
-            const pathMatch = videoUrl.match(
-              /\/storage\/v1\/object\/public\/media\/(.+)$/
-            );
-            let fetchUrl = videoUrl;
-            if (pathMatch) {
-              const { data: signedData } = await supabase.storage
-                .from("media")
-                .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
-              if (signedData?.signedUrl) fetchUrl = signedData.signedUrl;
+            const fetchUrl = await resolveToSignedUrl(supabase, post.media_urls[videoIndex]);
+            if (!fetchUrl) {
+              results[platformId] = { success: false, error: "Failed to create signed URL for video" };
+              continue;
             }
 
             const videoRes = await fetch(fetchUrl);
@@ -225,18 +240,9 @@ export default function ScheduledPage() {
             } else {
               const ytData = await ytRes.json();
               if (post.thumbnail_url && ytData.id) {
-                const thumbPathMatch = post.thumbnail_url.match(
-                  /\/storage\/v1\/object\/public\/media\/(.+)$/
-                );
-                let thumbFetchUrl = post.thumbnail_url;
-                if (thumbPathMatch) {
-                  const { data: sd } = await supabase.storage
-                    .from("media")
-                    .createSignedUrl(decodeURIComponent(thumbPathMatch[1]), 3600);
-                  if (sd?.signedUrl) thumbFetchUrl = sd.signedUrl;
-                }
-                const thumbRes = await fetch(thumbFetchUrl);
-                if (thumbRes.ok) {
+                const thumbFetchUrl = await resolveToSignedUrl(supabase, post.thumbnail_url);
+                const thumbRes = thumbFetchUrl ? await fetch(thumbFetchUrl) : null;
+                if (thumbRes && thumbRes.ok) {
                   const thumbBlob = await thumbRes.blob();
                   await fetch(
                     `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${ytData.id}&uploadType=media`,
@@ -281,29 +287,22 @@ export default function ScheduledPage() {
           setProcessingStatus("Publishing to Instagram...");
           const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
 
-          // Convert public URLs to signed URLs
+          // Resolve stored paths/URLs to signed URLs
           const items: { url: string; isVideo: boolean }[] = [];
           for (let i = 0; i < (post.media_urls as string[]).length; i++) {
-            const publicUrl = (post.media_urls as string[])[i];
+            const stored = (post.media_urls as string[])[i];
             const isVideo =
               (post.media_types as string[] | null)?.[i]?.startsWith(
                 "video/"
               ) ?? false;
-            const pathMatch = publicUrl.match(
-              /\/storage\/v1\/object\/public\/media\/(.+)$/
-            );
-            if (pathMatch) {
-              const { data: signedData } = await supabase.storage
-                .from("media")
-                .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
-              items.push({
-                url: signedData?.signedUrl || publicUrl,
-                isVideo,
-              });
-            } else {
-              items.push({ url: publicUrl, isVideo });
+            const signedUrl = await resolveToSignedUrl(supabase, stored);
+            if (!signedUrl) {
+              results[platformId] = { success: false, error: `Failed to create signed URL for item ${i + 1}` };
+              break;
             }
+            items.push({ url: signedUrl, isVideo });
           }
+          if (items.length !== (post.media_urls as string[]).length) continue;
 
           if (items.length === 1) {
             results[platformId] = await postToInstagramServer(
@@ -338,7 +337,7 @@ export default function ScheduledPage() {
 
     setProcessingStatus("");
     return processedCount;
-  }, []);
+  }, [resolveToSignedUrl]);
 
   // On mount: reset stuck posts, process overdue, then load
   useEffect(() => {

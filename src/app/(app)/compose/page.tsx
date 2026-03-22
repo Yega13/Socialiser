@@ -488,16 +488,8 @@ export default function ComposePage() {
         return;
       }
 
-      // Store signed URL (30-day expiry) so cron page can use it without user auth
-      const { data: signedData } = await supabase.storage
-        .from("media")
-        .createSignedUrl(fileName, 2592000);
-      if (signedData?.signedUrl) {
-        mediaUrls.push(signedData.signedUrl);
-      } else {
-        const { data: urlData } = supabase.storage.from("media").getPublicUrl(fileName);
-        mediaUrls.push(urlData.publicUrl);
-      }
+      // Store the raw file path — signed URLs are created at processing time
+      mediaUrls.push(fileName);
       mediaTypes.push(contentType);
       cropOffsets.push(item.cropOffset);
     }
@@ -510,10 +502,7 @@ export default function ComposePage() {
         .from("media")
         .upload(thumbName, thumbnailBlob, { upsert: true, contentType: "image/jpeg" });
       if (!error) {
-        const { data: thumbSigned } = await supabase.storage
-          .from("media")
-          .createSignedUrl(thumbName, 2592000);
-        thumbUrl = thumbSigned?.signedUrl || supabase.storage.from("media").getPublicUrl(thumbName).data.publicUrl;
+        thumbUrl = thumbName; // Store path, not URL
       }
     }
 

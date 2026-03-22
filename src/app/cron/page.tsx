@@ -228,17 +228,33 @@ export default async function CronPage({
     return <p>Unauthorized</p>;
   }
 
-  // Admin client for DB operations (bypasses RLS)
+  // Admin client for DB + storage (service role bypasses RLS, can create signed URLs)
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Anon client for storage signed URLs (matches what browser client produces)
-  const anonClient = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-  );
+  // Helper: resolve a stored value (path or legacy URL) to a signed URL
+  async function resolveToSignedUrl(stored: string): Promise<string> {
+    // New format: just a file path like "scheduled/1234-image.jpg"
+    if (!stored.startsWith("http")) {
+      const { data } = await supabase.storage
+        .from("media")
+        .createSignedUrl(stored, 3600);
+      return data?.signedUrl || "";
+    }
+    // Legacy: full URL — extract path and create signed URL
+    const pathMatch = stored.match(
+      /\/storage\/v1\/object\/(?:public|sign)\/media\/([^?]+)/
+    );
+    if (pathMatch) {
+      const { data } = await supabase.storage
+        .from("media")
+        .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
+      return data?.signedUrl || stored;
+    }
+    return stored;
+  }
 
   // Reset any stuck "processing" posts back to pending
   await supabase
@@ -255,9 +271,10 @@ export default async function CronPage({
     .limit(10);
 
   if (fetchErr || !posts || posts.length === 0) {
-    return <p>OK: 0 processed</p>;
+    return <p>OK: 0 found. {fetchErr ? `Error: ${fetchErr.message}` : "No overdue posts."}</p>;
   }
 
+  const log: string[] = [`Found ${posts.length} overdue post(s)`];
   let processed = 0;
 
   for (const post of posts) {
@@ -350,16 +367,10 @@ export default async function CronPage({
           continue;
         }
         try {
-          const videoUrl = post.media_urls[videoIndex];
-          const pathMatch = videoUrl.match(
-            /\/storage\/v1\/object\/public\/media\/(.+)$/
-          );
-          let fetchUrl = videoUrl;
-          if (pathMatch) {
-            const { data: signedData } = await anonClient.storage
-              .from("media")
-              .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
-            if (signedData?.signedUrl) fetchUrl = signedData.signedUrl;
+          const fetchUrl = await resolveToSignedUrl(post.media_urls[videoIndex]);
+          if (!fetchUrl) {
+            results[platformId] = { success: false, error: "Failed to create signed URL for video" };
+            continue;
           }
 
           const videoRes = await fetch(fetchUrl);
@@ -406,18 +417,9 @@ export default async function CronPage({
           } else {
             const ytData = await ytRes.json();
             if (post.thumbnail_url && ytData.id) {
-              const thumbPathMatch = post.thumbnail_url.match(
-                /\/storage\/v1\/object\/public\/media\/(.+)$/
-              );
-              let thumbFetchUrl = post.thumbnail_url;
-              if (thumbPathMatch) {
-                const { data: sd } = await anonClient.storage
-                  .from("media")
-                  .createSignedUrl(decodeURIComponent(thumbPathMatch[1]), 3600);
-                if (sd?.signedUrl) thumbFetchUrl = sd.signedUrl;
-              }
-              const thumbRes = await fetch(thumbFetchUrl);
-              if (thumbRes.ok) {
+              const thumbFetchUrl = await resolveToSignedUrl(post.thumbnail_url);
+              const thumbRes = thumbFetchUrl ? await fetch(thumbFetchUrl) : null;
+              if (thumbRes && thumbRes.ok) {
                 const thumbBlob = await thumbRes.blob();
                 await fetch(
                   `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${ytData.id}&uploadType=media`,
@@ -461,30 +463,22 @@ export default async function CronPage({
 
         const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
 
-        // Convert public URLs to signed URLs so Instagram can access private bucket
+        // Resolve stored paths/URLs to signed URLs for Instagram
         const items: { url: string; isVideo: boolean }[] = [];
         for (let i = 0; i < (post.media_urls as string[]).length; i++) {
-          const publicUrl = (post.media_urls as string[])[i];
+          const stored = (post.media_urls as string[])[i];
           const isVideo =
             (post.media_types as string[] | null)?.[i]?.startsWith(
               "video/"
             ) ?? false;
-          const pathMatch = publicUrl.match(
-            /\/storage\/v1\/object\/public\/media\/(.+)$/
-          );
-          if (pathMatch) {
-            const decodedPath = decodeURIComponent(pathMatch[1]);
-            const { data: signedData } = await anonClient.storage
-              .from("media")
-              .createSignedUrl(decodedPath, 3600);
-            items.push({
-              url: signedData?.signedUrl || publicUrl,
-              isVideo,
-            });
-          } else {
-            items.push({ url: publicUrl, isVideo });
+          const signedUrl = await resolveToSignedUrl(stored);
+          if (!signedUrl) {
+            results[platformId] = { success: false, error: `Failed to create signed URL for item ${i + 1}` };
+            break;
           }
+          items.push({ url: signedUrl, isVideo });
         }
+        if (items.length !== (post.media_urls as string[]).length) continue;
 
         if (items.length === 1) {
           results[platformId] = await postToInstagram(
@@ -514,8 +508,16 @@ export default async function CronPage({
       })
       .eq("id", post.id);
 
+    log.push(`Post "${post.title}": ${JSON.stringify(results)}`);
     processed++;
   }
 
-  return <p>OK: {processed} processed</p>;
+  return (
+    <div>
+      <p>OK: {processed} processed</p>
+      <pre style={{ fontSize: "12px", whiteSpace: "pre-wrap" }}>
+        {log.join("\n")}
+      </pre>
+    </div>
+  );
 }
