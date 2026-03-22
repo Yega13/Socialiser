@@ -113,15 +113,10 @@ async function postToInstagram(
   igUserId: string,
   caption: string,
   mediaUrl: string,
-  isVideo: boolean
+  isVideo: boolean,
+  publishAt?: number
 ): Promise<{ success: boolean; error?: string }> {
   try {
-    // Verify URL is accessible before sending to Instagram
-    const urlCheck = await fetch(mediaUrl, { method: "HEAD" });
-    if (!urlCheck.ok) {
-      return { success: false, error: `Media URL not accessible (${urlCheck.status}). URL starts: ${mediaUrl.slice(0, 80)}` };
-    }
-
     const params: Record<string, string> = { caption };
     if (isVideo) {
       params.media_type = "REELS";
@@ -130,9 +125,16 @@ async function postToInstagram(
       params.image_url = mediaUrl;
     }
     const container = await createIgContainer(accessToken, igUserId, params);
-    if (!container.id) return { success: false, error: `${container.error} | URL: ${mediaUrl.slice(0, 80)}` };
+    if (!container.id) return { success: false, error: container.error };
     const waitErr = await waitForContainer(accessToken, container.id);
     if (waitErr) return { success: false, error: waitErr };
+
+    // Hold until exact scheduled time before publishing
+    if (publishAt) {
+      const delay = publishAt - Date.now();
+      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+    }
+
     const publishRes = await fetch(
       `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
       {
@@ -166,7 +168,8 @@ async function postCarouselToInstagram(
   accessToken: string,
   igUserId: string,
   caption: string,
-  items: { url: string; isVideo: boolean }[]
+  items: { url: string; isVideo: boolean }[],
+  publishAt?: number
 ): Promise<{ success: boolean; error?: string }> {
   try {
     if (items.length < 2 || items.length > 10) {
@@ -209,6 +212,13 @@ async function postCarouselToInstagram(
     const carouselWaitErr = await waitForContainer(accessToken, carouselContainer.id);
     if (carouselWaitErr)
       return { success: false, error: `Carousel: ${carouselWaitErr}` };
+
+    // Hold until exact scheduled time before publishing
+    if (publishAt) {
+      const delay = publishAt - Date.now();
+      if (delay > 0) await new Promise((r) => setTimeout(r, delay));
+    }
+
     const publishRes = await fetch(
       `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
       {
@@ -443,6 +453,11 @@ export default async function CronPage({
           );
           form.append("video", videoBlob);
 
+          // Hold until exact scheduled time before uploading
+          const ytPublishAt = new Date(post.scheduled_at).getTime();
+          const ytDelay = ytPublishAt - Date.now();
+          if (ytDelay > 0) await new Promise((r) => setTimeout(r, ytDelay));
+
           const ytRes = await fetch(
             "https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart",
             {
@@ -524,20 +539,24 @@ export default async function CronPage({
         }
         if (items.length !== (post.media_urls as string[]).length) continue;
 
+        const publishAt = new Date(post.scheduled_at).getTime();
+
         if (items.length === 1) {
           results[platformId] = await postToInstagram(
             accessToken,
             conn.platform_user_id,
             caption,
             items[0].url,
-            items[0].isVideo
+            items[0].isVideo,
+            publishAt
           );
         } else {
           results[platformId] = await postCarouselToInstagram(
             accessToken,
             conn.platform_user_id,
             caption,
-            items
+            items,
+            publishAt
           );
         }
       }

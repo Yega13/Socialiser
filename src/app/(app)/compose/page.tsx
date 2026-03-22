@@ -898,52 +898,13 @@ export default function ComposePage() {
                 <span className="font-bold text-sm text-[#0A0A0A]">Schedule for later</span>
               </label>
               {scheduleEnabled && (
-                <div className="mt-2 flex gap-2">
-                  <input
-                    type="date"
-                    value={scheduleDate.slice(0, 10)}
-                    onChange={(e) => {
-                      const time = scheduleDate.slice(11) || "12:00";
-                      setScheduleDate(e.target.value + "T" + time);
-                    }}
-                    min={new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10)}
-                    className="flex-1 border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
-                  />
-                  <div className="relative flex-1">
-                    <select
-                      value={scheduleDate.slice(11, 13) || "12"}
-                      onChange={(e) => {
-                        const date = scheduleDate.slice(0, 10) || new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-                        const min = scheduleDate.slice(14, 16) || "00";
-                        setScheduleDate(date + "T" + e.target.value + ":" + min);
-                      }}
-                      className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all appearance-none"
-                    >
-                      {Array.from({ length: 24 }, (_, i) => (
-                        <option key={i} value={String(i).padStart(2, "0")}>
-                          {String(i).padStart(2, "0")}h
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div className="relative flex-1">
-                    <select
-                      value={scheduleDate.slice(14, 16) || "00"}
-                      onChange={(e) => {
-                        const date = scheduleDate.slice(0, 10) || new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-                        const hr = scheduleDate.slice(11, 13) || "12";
-                        setScheduleDate(date + "T" + hr + ":" + e.target.value);
-                      }}
-                      className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all appearance-none"
-                    >
-                      {Array.from({ length: 60 }, (_, i) => (
-                        <option key={i} value={String(i).padStart(2, "0")}>
-                          {String(i).padStart(2, "0")}m
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
+                <input
+                  type="datetime-local"
+                  value={scheduleDate}
+                  onChange={(e) => setScheduleDate(e.target.value)}
+                  min={new Date(Date.now() + 60000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+                  className="mt-2 w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
+                />
               )}
             </div>
 
