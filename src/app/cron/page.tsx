@@ -99,6 +99,12 @@ async function postToInstagram(
   isVideo: boolean
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    // Verify URL is accessible before sending to Instagram
+    const urlCheck = await fetch(mediaUrl, { method: "HEAD" });
+    if (!urlCheck.ok) {
+      return { success: false, error: `Media URL not accessible (${urlCheck.status}). URL starts: ${mediaUrl.slice(0, 80)}` };
+    }
+
     const params: Record<string, string> = { caption };
     if (isVideo) {
       params.media_type = "REELS";
@@ -107,7 +113,7 @@ async function postToInstagram(
       params.image_url = mediaUrl;
     }
     const container = await createIgContainer(accessToken, igUserId, params);
-    if (!container.id) return { success: false, error: container.error };
+    if (!container.id) return { success: false, error: `${container.error} | URL: ${mediaUrl.slice(0, 80)}` };
     const waitErr = await waitForContainer(accessToken, container.id);
     if (waitErr) return { success: false, error: waitErr };
     const publishRes = await fetch(

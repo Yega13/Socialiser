@@ -91,6 +91,15 @@ export async function postToInstagramServer(
   isVideo: boolean
 ): Promise<{ success: boolean; error?: string }> {
   try {
+    // Verify the URL is accessible before sending to Instagram
+    const urlCheck = await fetch(mediaUrl, { method: "HEAD" });
+    if (!urlCheck.ok) {
+      return {
+        success: false,
+        error: `Media URL not accessible (${urlCheck.status}). URL starts with: ${mediaUrl.slice(0, 80)}...`,
+      };
+    }
+
     const params: Record<string, string> = { caption };
     if (isVideo) {
       params.media_type = "REELS";
@@ -100,7 +109,12 @@ export async function postToInstagramServer(
     }
 
     const container = await createIgContainer(accessToken, igUserId, params);
-    if (!container.id) return { success: false, error: container.error };
+    if (!container.id) {
+      return {
+        success: false,
+        error: `${container.error} | URL type: ${mediaUrl.startsWith("http") ? (mediaUrl.includes("/object/sign/") ? "signed" : mediaUrl.includes("/object/public/") ? "public" : "other") : "path"} | URL length: ${mediaUrl.length}`,
+      };
+    }
 
     const waitErr = await waitForContainer(accessToken, container.id);
     if (waitErr) return { success: false, error: waitErr };
@@ -136,6 +150,17 @@ export async function postCarouselToInstagram(
       return { success: false, error: "Carousel requires 2-10 items" };
     }
 
+    // Verify all URLs are accessible first
+    for (let i = 0; i < items.length; i++) {
+      const check = await fetch(items[i].url, { method: "HEAD" });
+      if (!check.ok) {
+        return {
+          success: false,
+          error: `Item ${i + 1}: URL not accessible (${check.status}). Starts with: ${items[i].url.slice(0, 80)}...`,
+        };
+      }
+    }
+
     // Step 1: Create a container for each item (no caption on children)
     const childIds: string[] = [];
     for (let i = 0; i < items.length; i++) {
@@ -149,7 +174,7 @@ export async function postCarouselToInstagram(
       }
 
       const container = await createIgContainer(accessToken, igUserId, params);
-      if (!container.id) return { success: false, error: `Item ${i + 1}: ${container.error}` };
+      if (!container.id) return { success: false, error: `Item ${i + 1}: ${container.error} | URL: ${item.url.slice(0, 80)}...` };
 
       const waitErr = await waitForContainer(accessToken, container.id);
       if (waitErr) return { success: false, error: `Item ${i + 1}: ${waitErr}` };
