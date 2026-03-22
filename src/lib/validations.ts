@@ -17,7 +17,6 @@ export const profileSchema = z.object({
     .string()
     .min(3, "Username must be at least 3 characters")
     .max(30, "Username must be at most 30 characters")
-    .regex(/^[a-z0-9_]+$/, "Username can only contain lowercase letters, numbers and underscores")
     .optional()
     .or(z.literal("")),
   bio: z.string().max(160, "Bio must be at most 160 characters").optional().or(z.literal("")),

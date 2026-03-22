@@ -47,14 +47,14 @@ export function ProfileForm({ profile, onSave }: ProfileFormProps) {
         {...register("username")}
       />
       <div className="flex flex-col gap-1.5">
-        <label htmlFor="bio" className="text-sm font-semibold text-[#0A0A0A]">
+        <label htmlFor="bio" className="text-sm font-semibold">
           Bio
         </label>
         <textarea
           id="bio"
           rows={3}
           placeholder="Tell the world about yourself…"
-          className="w-full px-3 py-2 text-sm bg-[#F9F9F7] text-[#0A0A0A] border border-[#0A0A0A] rounded-none outline-none placeholder:text-[#5C5C5A] focus:ring-2 focus:ring-[#C8FF00] resize-none"
+          className="w-full px-3 py-2 text-sm bg-[var(--color-base-white)] border border-[var(--color-base-black)] rounded-none outline-none placeholder:text-[var(--color-base-600)] focus:ring-2 focus:ring-[var(--color-brand-lime)] resize-none"
           {...register("bio")}
         />
         {errors.bio && (

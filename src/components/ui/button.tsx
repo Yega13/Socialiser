@@ -14,15 +14,15 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 
 const variantClasses: Record<Variant, string> = {
   primary:
-    "bg-[#C8FF00] text-[#0A0A0A] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
+    "bg-[var(--color-brand-lime)] text-[#0A0A0A] border border-[var(--color-base-black)] shadow-[var(--shadow-hard)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_var(--color-base-black)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
   secondary:
-    "bg-[#7C3AED] text-white border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
+    "bg-[var(--color-brand-violet)] text-white border border-[var(--color-base-black)] shadow-[var(--shadow-hard)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_var(--color-base-black)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
   outline:
-    "bg-transparent text-[#0A0A0A] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
+    "bg-transparent border border-[var(--color-base-black)] shadow-[var(--shadow-hard)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_var(--color-base-black)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
   ghost:
-    "bg-transparent text-[#0A0A0A] hover:bg-[#EBEBEA] font-semibold transition-colors",
+    "bg-transparent hover:bg-[var(--color-base-100)] font-semibold transition-colors",
   danger:
-    "bg-[#FF4F4F] text-white border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_#0A0A0A] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
+    "bg-[var(--color-brand-coral)] text-white border border-[var(--color-base-black)] shadow-[var(--shadow-hard)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_var(--color-base-black)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
 };
 
 const sizeClasses: Record<Size, string> = {

@@ -33,3 +33,14 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+html.dark {
+  --color-base-white: #0A0A0A;
+  --color-base-black: #F9F9F7;
+  --color-base-800: #D4D4D2;
+  --color-base-600: #A0A09E;
+  --color-base-200: #2A2A28;
+  --color-base-100: #1A1A18;
+  --shadow-hard: 4px 4px 0px 0px #3A3A38;
+  --shadow-brand: 4px 4px 0px 0px var(--color-brand-violet);
+}
