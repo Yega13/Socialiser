@@ -2,8 +2,8 @@ import { createClient } from "@/lib/supabase/server";
 import { redirect } from "next/navigation";
 import { AvatarUploader } from "@/components/settings/avatar-uploader";
 import { ProfileForm } from "@/components/settings/profile-form";
+import { saveProfile } from "./actions";
 import type { Profile } from "@/types";
-import type { ProfileInput } from "@/lib/validations";
 
 export default async function SettingsPage() {
   const supabase = await createClient();
@@ -18,25 +18,6 @@ export default async function SettingsPage() {
     .select("*")
     .eq("id", user.id)
     .single();
-
-  async function saveProfile(data: ProfileInput) {
-    "use server";
-    const supabase = await createClient();
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return { error: "Not authenticated" };
-
-    const { error } = await supabase.from("profiles").update({
-      full_name: data.fullName,
-      username: data.username || null,
-      bio: data.bio || null,
-      updated_at: new Date().toISOString(),
-    }).eq("id", user.id);
-
-    if (error) return { error: error.message };
-    return {};
-  }
 
   return (
     <div className="space-y-6 w-full max-w-2xl">
