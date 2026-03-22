@@ -34,7 +34,6 @@ export default async function SettingsPage() {
             userId={user.id}
             currentAvatarUrl={(profile as Profile | null)?.avatar_url}
             name={(profile as Profile | null)?.full_name}
-            onUpload={() => {}}
           />
 
           <ProfileForm

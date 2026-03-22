@@ -9,7 +9,7 @@ interface AvatarUploaderProps {
   userId: string;
   currentAvatarUrl?: string | null;
   name?: string | null;
-  onUpload: (url: string) => void;
+  onUpload?: (url: string) => void;
 }
 
 export function AvatarUploader({ userId, currentAvatarUrl, name, onUpload }: AvatarUploaderProps) {
@@ -34,7 +34,7 @@ export function AvatarUploader({ userId, currentAvatarUrl, name, onUpload }: Ava
         .update({ avatar_url: publicUrl, updated_at: new Date().toISOString() })
         .eq("id", userId);
 
-      onUpload(publicUrl);
+      onUpload?.(publicUrl);
     }
   }
 
