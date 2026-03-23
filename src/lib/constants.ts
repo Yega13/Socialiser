@@ -13,6 +13,7 @@ export const PLATFORMS = [
     description: "Upload videos",
     icon: "▶",
     color: "#FF0000",
+    textColor: "#F9F9F7",
     comingSoon: false,
   },
   {
@@ -21,6 +22,7 @@ export const PLATFORMS = [
     description: "Post threads & updates",
     icon: "𝕏",
     color: "#000000",
+    textColor: "#F9F9F7",
     comingSoon: true,
   },
   {
@@ -29,6 +31,7 @@ export const PLATFORMS = [
     description: "Share professional content",
     icon: "in",
     color: "#0A66C2",
+    textColor: "#F9F9F7",
     comingSoon: true,
   },
   {
@@ -37,6 +40,7 @@ export const PLATFORMS = [
     description: "Publish photos & reels",
     icon: "IG",
     color: "#E1306C",
+    textColor: "#F9F9F7",
     comingSoon: false,
   },
   {
@@ -45,6 +49,7 @@ export const PLATFORMS = [
     description: "Join the conversation",
     icon: "@",
     color: "#000000",
+    textColor: "#F9F9F7",
     comingSoon: true,
   },
   {
@@ -53,6 +58,7 @@ export const PLATFORMS = [
     description: "Short-form video",
     icon: "TK",
     color: "#010101",
+    textColor: "#F9F9F7",
     comingSoon: true,
   },
   {
@@ -61,6 +67,7 @@ export const PLATFORMS = [
     description: "Share posts & stories",
     icon: "fb",
     color: "#1877F2",
+    textColor: "#F9F9F7",
     comingSoon: true,
   },
   {
@@ -69,6 +76,7 @@ export const PLATFORMS = [
     description: "Post to VK communities",
     icon: "VK",
     color: "#0077FF",
+    textColor: "#F9F9F7",
     comingSoon: true,
   },
   {
@@ -77,6 +85,7 @@ export const PLATFORMS = [
     description: "Share snaps & stories",
     icon: "SC",
     color: "#FFFC00",
+    textColor: "#0A0A0A",
     comingSoon: true,
   },
   {
@@ -85,6 +94,7 @@ export const PLATFORMS = [
     description: "Pin images & ideas",
     icon: "P",
     color: "#E60023",
+    textColor: "#F9F9F7",
     comingSoon: true,
   },
 ] as const;

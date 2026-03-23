@@ -21,8 +21,8 @@ export function ConnectedPlatforms({ platforms }: ConnectedPlatformsProps) {
           >
             <div className="flex items-center gap-3">
               <span
-                className="w-9 h-9 flex items-center justify-center text-sm font-black border border-[var(--color-base-black)] text-white shrink-0"
-                style={{ background: platform.color }}
+                className="w-9 h-9 flex items-center justify-center text-sm font-black border border-[var(--color-base-black)] shrink-0"
+                style={{ background: platform.color, color: platform.textColor }}
               >
                 {platform.icon}
               </span>

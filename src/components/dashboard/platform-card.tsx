@@ -85,7 +85,7 @@ export function PlatformCard({
         <div className="flex items-center gap-3">
           <div
             className="w-10 h-10 flex items-center justify-center border border-[#0A0A0A] font-black text-sm shrink-0"
-            style={{ background: platform.color, color: "#F9F9F7" }}
+            style={{ background: platform.color, color: platform.textColor }}
           >
             {platform.icon}
           </div>
