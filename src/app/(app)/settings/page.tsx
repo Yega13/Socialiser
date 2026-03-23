@@ -3,8 +3,8 @@ import { redirect } from "next/navigation";
 import { AvatarUploader } from "@/components/settings/avatar-uploader";
 import { ProfileForm } from "@/components/settings/profile-form";
 import { ThemeToggle } from "@/components/settings/theme-toggle";
-import { LogoutButton } from "@/components/settings/logout-button";
 import { ConnectedPlatforms } from "@/components/settings/connected-platforms";
+import { ActiveSessions } from "@/components/settings/active-sessions";
 import { DeleteAccount } from "@/components/settings/delete-account";
 import { saveProfile } from "./actions";
 import type { Profile, ConnectedPlatform } from "@/types";
@@ -79,12 +79,9 @@ export default async function SettingsPage() {
               <p className="text-sm font-medium">Email</p>
               <p className="text-sm text-[var(--color-base-600)]">{user.email}</p>
             </div>
-            <div className="flex items-center justify-between pt-2 border-t border-[var(--color-base-200)]">
-              <div>
-                <p className="text-sm font-medium">Session</p>
-                <p className="text-xs text-[var(--color-base-600)]">Sign out on this device.</p>
-              </div>
-              <LogoutButton />
+            <div className="pt-2 border-t border-[var(--color-base-200)]">
+              <p className="text-sm font-medium mb-3">Active Sessions</p>
+              <ActiveSessions lastSignInAt={user.last_sign_in_at ?? null} email={user.email} />
             </div>
           </div>
         </section>

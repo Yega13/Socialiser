@@ -20,7 +20,7 @@ const variantClasses: Record<Variant, string> = {
   outline:
     "bg-transparent border border-[var(--color-base-black)] shadow-[var(--shadow-hard)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_var(--color-base-black)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
   ghost:
-    "bg-transparent hover:bg-[var(--color-base-100)] font-semibold transition-colors",
+    "bg-transparent border border-[var(--color-base-black)] hover:bg-[var(--color-base-100)] font-semibold transition-colors",
   danger:
     "bg-[var(--color-brand-coral)] text-white border border-[var(--color-base-black)] shadow-[var(--shadow-hard)] hover:translate-x-[2px] hover:translate-y-[2px] hover:shadow-[2px_2px_0px_0px_var(--color-base-black)] active:translate-x-[4px] active:translate-y-[4px] active:shadow-none font-semibold transition-all",
 };

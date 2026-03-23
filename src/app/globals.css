@@ -88,6 +88,11 @@ html.dark .bg-\[\#7C3AED\] .text-\[\#F9F9F7\] { color: #F9F9F7 !important; }
 html.dark .bg-\[\#00D4FF\].text-\[\#0A0A0A\],
 html.dark .bg-\[\#00D4FF\] .text-\[\#0A0A0A\] { color: #0A0A0A !important; }
 
+/* Marketing dark sections — keep dark in all themes */
+html.dark section.bg-\[\#0A0A0A\] { background-color: #0A0A0A !important; color: #F9F9F7 !important; }
+html.dark section.bg-\[\#0A0A0A\] .bg-\[\#0A0A0A\] { background-color: #0A0A0A !important; }
+html.dark section.bg-\[\#0A0A0A\] .text-\[\#F9F9F7\] { color: #F9F9F7 !important; }
+
 /* Inputs in dark mode */
 html.dark input, html.dark textarea, html.dark select {
   background-color: #141412 !important;
