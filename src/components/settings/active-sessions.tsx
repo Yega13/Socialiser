@@ -71,14 +71,14 @@ export function ActiveSessions({ lastSignInAt, email }: ActiveSessionsProps) {
         </span>
       </div>
 
-      <div className="flex flex-col sm:flex-row gap-2">
-        <Button variant="outline" size="sm" onClick={handleSignOutLocal} loading={loadingLocal} className="flex-1">
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="outline" size="sm" onClick={handleSignOutLocal} loading={loadingLocal} className="w-full">
           Sign out this device
         </Button>
-        <Button variant="outline" size="sm" onClick={handleSignOutOthers} loading={loadingOthers} className="flex-1">
+        <Button variant="outline" size="sm" onClick={handleSignOutOthers} loading={loadingOthers} className="w-full">
           Sign out other devices
         </Button>
-        <Button variant="danger" size="sm" onClick={handleSignOutAll} loading={loadingAll} className="flex-1">
+        <Button variant="danger" size="sm" onClick={handleSignOutAll} loading={loadingAll} className="w-full col-span-2">
           Sign out everywhere
         </Button>
       </div>
