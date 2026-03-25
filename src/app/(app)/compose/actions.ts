@@ -106,7 +106,8 @@ export async function postToInstagramServer(
   igUserId: string,
   caption: string,
   mediaUrl: string,
-  isVideo: boolean
+  isVideo: boolean,
+  postType: "post" | "reel" = "reel"
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Verify the URL is accessible before sending to Instagram
@@ -120,7 +121,7 @@ export async function postToInstagramServer(
 
     const params: Record<string, string> = { caption };
     if (isVideo) {
-      params.media_type = "REELS";
+      params.media_type = postType === "reel" ? "REELS" : "VIDEO";
       params.video_url = mediaUrl;
     } else {
       params.image_url = mediaUrl;
@@ -403,9 +404,10 @@ export async function processScheduledPosts(): Promise<{ processed: number }> {
           }
         }
 
+        const igPostType = (post.ig_post_type as "post" | "reel" | undefined) ?? "reel";
         if (items.length === 1) {
           results[platformId] = await postToInstagramServer(
-            accessToken, conn.platform_user_id, caption, items[0].url, items[0].isVideo
+            accessToken, conn.platform_user_id, caption, items[0].url, items[0].isVideo, igPostType
           );
         } else {
           results[platformId] = await postCarouselToInstagram(

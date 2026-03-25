@@ -65,6 +65,7 @@ create table public.scheduled_posts (
   crop_offsets jsonb,
   thumbnail_url text,
   filter_settings jsonb,
+  ig_post_type text default 'reel' check (ig_post_type in ('post', 'reel')),
   created_at timestamptz default now()
 );
 alter table public.scheduled_posts enable row level security;

@@ -6,6 +6,7 @@ import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { refreshYouTubeToken, refreshInstagramToken, postToInstagramServer, postCarouselToInstagram } from "./actions";
+import { moderatePost } from "@/lib/moderation";
 
 type ConnectedPlatform = {
   id: string;
@@ -195,7 +196,8 @@ export default function ComposePage() {
   const [videoDuration, setVideoDuration] = useState(0);
   const [videoTime, setVideoTime] = useState(0);
   const [previewTab, setPreviewTab] = useState<string>("instagram");
-  const [policyAccepted, setPolicyAccepted] = useState(false);
+  const [moderationError, setModerationError] = useState<string | null>(null);
+  const [igPostType, setIgPostType] = useState<"post" | "reel">("post");
   const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -310,6 +312,12 @@ export default function ComposePage() {
 
     setMediaItems(newItems);
     setPreviewIndex(0);
+    // Default to "reel" for single video, "post" for images/carousel
+    if (newItems.length === 1 && newItems[0].file.type.startsWith("video/")) {
+      setIgPostType("reel");
+    } else {
+      setIgPostType("post");
+    }
   }
 
   function removeMediaItem(index: number) {
@@ -321,6 +329,14 @@ export default function ComposePage() {
 
   async function handlePost() {
     if (!title.trim() || selected.length === 0) return;
+
+    setModerationError(null);
+    const modResult = moderatePost(title, description);
+    if (modResult.blocked) {
+      setModerationError(modResult.reason ?? "Content blocked by moderation.");
+      return;
+    }
+
     setIsPosting(true);
 
     const supabase = createClient();
@@ -417,13 +433,17 @@ export default function ComposePage() {
 
             if (uploadedItems.length === 1) {
               // Single post
-              setPostingStatus(uploadedItems[0].isVideo ? "Publishing reel..." : "Publishing to Instagram...");
+              const typeLabel = uploadedItems[0].isVideo
+                ? (effectiveIgPostType === "reel" ? "Publishing reel..." : "Publishing video post...")
+                : "Publishing to Instagram...";
+              setPostingStatus(typeLabel);
               postResults[platformId] = await postToInstagramServer(
                 accessToken,
                 conn.platform_user_id,
                 caption,
                 uploadedItems[0].url,
-                uploadedItems[0].isVideo
+                uploadedItems[0].isVideo,
+                effectiveIgPostType === "reel" ? "reel" : "post"
               );
             } else {
               // Carousel post
@@ -447,6 +467,14 @@ export default function ComposePage() {
 
   async function handleSchedule() {
     if (!title.trim() || selected.length === 0 || !scheduleDate) return;
+
+    setModerationError(null);
+    const modResult = moderatePost(title, description);
+    if (modResult.blocked) {
+      setModerationError(modResult.reason ?? "Content blocked by moderation.");
+      return;
+    }
+
     setIsPosting(true);
     setPostingStatus("Preparing scheduled post...");
 
@@ -521,6 +549,7 @@ export default function ComposePage() {
       crop_offsets: cropOffsets,
       thumbnail_url: thumbUrl ?? null,
       filter_settings: filters,
+      ig_post_type: effectiveIgPostType === "carousel" ? "post" : effectiveIgPostType,
     });
 
     if (insertErr) {
@@ -546,7 +575,6 @@ export default function ComposePage() {
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const canPost =
     !isPosting &&
-    policyAccepted &&
     selected.length > 0 &&
     title.trim().length > 0 &&
     (!needsMedia || mediaItems.length > 0) &&
@@ -555,6 +583,18 @@ export default function ComposePage() {
   const acceptTypes = youtubeSelected && !instagramSelected
     ? "video/*"
     : "image/*,video/*";
+
+  // Instagram post type detection
+  const isCarousel = mediaItems.length > 1;
+  const hasSingleVideo = mediaItems.length === 1 && mediaItems[0]?.file.type.startsWith("video/");
+  const hasSingleImage = mediaItems.length === 1 && mediaItems[0]?.file.type.startsWith("image/");
+  // Carousel = always "post", single image = always "post", single video = user chooses
+  const showIgPostTypePicker = instagramSelected && hasSingleVideo;
+  const effectiveIgPostType: "post" | "reel" | "carousel" = isCarousel
+    ? "carousel"
+    : hasSingleVideo
+    ? igPostType
+    : "post";
 
   return (
     <div className="flex gap-8 max-w-4xl">
@@ -622,7 +662,7 @@ export default function ComposePage() {
           </label>
           <input
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            onChange={(e) => { setTitle(e.target.value); setModerationError(null); }}
             placeholder={instagramSelected ? "Write a caption..." : "Video title or post content"}
             maxLength={instagramSelected ? 2200 : 100}
             className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
@@ -642,7 +682,7 @@ export default function ComposePage() {
           </label>
           <textarea
             value={description}
-            onChange={(e) => setDescription(e.target.value)}
+            onChange={(e) => { setDescription(e.target.value); setModerationError(null); }}
             placeholder={instagramSelected
               ? "Add links, hashtags, mentions...\ne.g. https://yoursite.com #hashtag @mention"
               : "Add a description, links..."}
@@ -694,6 +734,66 @@ export default function ComposePage() {
                   </div>
                 ))}
               </div>
+            )}
+          </div>
+        )}
+
+        {/* Instagram post type selector */}
+        {instagramSelected && mediaItems.length > 0 && (
+          <div>
+            <label className="font-bold text-sm text-[var(--color-base-black)] block mb-2">
+              Post type
+              {isCarousel && (
+                <span className="font-normal text-[var(--color-gray-500)] ml-2">Carousel — always posted as feed post</span>
+              )}
+              {hasSingleImage && (
+                <span className="font-normal text-[var(--color-gray-500)] ml-2">Image — posted as feed post</span>
+              )}
+            </label>
+            {showIgPostTypePicker ? (
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setIgPostType("post")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2.5 border border-[var(--color-base-black)] text-sm font-bold transition-all",
+                    igPostType === "post"
+                      ? "bg-[var(--color-base-black)] text-[var(--color-base-white)] shadow-[2px_2px_0px_0px_#C8FF00]"
+                      : "bg-[var(--color-base-white)] text-[var(--color-base-black)] shadow-[2px_2px_0px_0px_var(--color-base-black)] opacity-50 hover:opacity-75"
+                  )}
+                >
+                  <span className="text-base leading-none">▶</span>
+                  Video Post
+                </button>
+                <button
+                  onClick={() => setIgPostType("reel")}
+                  className={cn(
+                    "flex items-center gap-2 px-4 py-2.5 border border-[var(--color-base-black)] text-sm font-bold transition-all",
+                    igPostType === "reel"
+                      ? "bg-[var(--color-base-black)] text-[var(--color-base-white)] shadow-[2px_2px_0px_0px_#C8FF00]"
+                      : "bg-[var(--color-base-white)] text-[var(--color-base-black)] shadow-[2px_2px_0px_0px_var(--color-base-black)] opacity-50 hover:opacity-75"
+                  )}
+                >
+                  <span className="text-base leading-none">♫</span>
+                  Reel
+                </button>
+              </div>
+            ) : (
+              <div className="flex gap-2">
+                <div className="flex items-center gap-2 px-4 py-2.5 border border-[var(--color-base-black)] bg-[var(--color-base-black)] text-[var(--color-base-white)] text-sm font-bold shadow-[2px_2px_0px_0px_#C8FF00]">
+                  <span className="text-base leading-none">{isCarousel ? "⊞" : "◻"}</span>
+                  {isCarousel ? `Carousel · ${mediaItems.length} items` : "Feed Post"}
+                </div>
+              </div>
+            )}
+            {igPostType === "reel" && hasSingleVideo && (
+              <p className="text-xs text-[var(--color-gray-500)] mt-2">
+                Reels appear in the Reels tab and can reach non-followers.
+              </p>
+            )}
+            {igPostType === "post" && hasSingleVideo && (
+              <p className="text-xs text-[var(--color-gray-500)] mt-2">
+                Video post appears on your profile grid.
+              </p>
             )}
           </div>
         )}
@@ -862,22 +962,11 @@ export default function ComposePage() {
           </div>
         )}
 
-        {/* Content policy */}
-        {!results && (
-          <label className="flex items-start gap-2 cursor-pointer select-none">
-            <input
-              type="checkbox"
-              checked={policyAccepted}
-              onChange={(e) => setPolicyAccepted(e.target.checked)}
-              className="w-4 h-4 accent-[#0A0A0A] cursor-pointer mt-0.5 shrink-0"
-            />
-            <span className="text-xs text-[#5C5C5A]">
-              I agree to the{" "}
-              <a href="/content-policy" target="_blank" className="text-[#7C3AED] font-bold hover:underline">
-                Content Policy
-              </a>
-            </span>
-          </label>
+        {/* Moderation error */}
+        {moderationError && (
+          <div className="p-3 border border-[#FF4F4F] bg-[#FF4F4F]/10">
+            <p className="text-xs text-[#FF4F4F] font-medium">{moderationError}</p>
+          </div>
         )}
 
         {/* Schedule & Post */}
@@ -924,8 +1013,10 @@ export default function ComposePage() {
                 ? scheduleDate ? "Scheduling..." : "Uploading..."
                 : scheduleDate
                 ? `Schedule for ${new Date(scheduleDate).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}`
-                : mediaItems.length > 1 && instagramSelected
+                : instagramSelected && effectiveIgPostType === "carousel"
                 ? `Post carousel to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`
+                : instagramSelected && effectiveIgPostType === "reel"
+                ? `Post reel${selected.length > 1 ? ` + ${selected.length - 1} more` : ""}`
                 : `Post to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`}
             </button>
             {isPosting && postingStatus && (
@@ -977,7 +1068,7 @@ export default function ComposePage() {
             {(selected.length === 1 ? instagramSelected : previewTab === "instagram" && instagramSelected) && (
               <>
                 <div className="border border-[#DBDBDB] bg-white rounded-sm overflow-hidden">
-                  {/* Header — avatar + username */}
+                  {/* Header — avatar + username + post type badge */}
                   <div className="flex items-center gap-2.5 px-3 py-2.5">
                     <div className="w-8 h-8 rounded-full bg-gradient-to-br from-[#FCAF45] via-[#E1306C] to-[#833AB4] flex items-center justify-center">
                       <div className="w-7 h-7 rounded-full bg-white flex items-center justify-center text-[10px] font-bold text-[#262626]">
@@ -986,6 +1077,14 @@ export default function ComposePage() {
                     </div>
                     <span className="text-[13px] font-semibold text-[#262626]">
                       {instagramConnected?.platform_username ?? "your_account"}
+                    </span>
+                    <span className={cn(
+                      "ml-auto text-[10px] font-bold px-1.5 py-0.5",
+                      effectiveIgPostType === "reel" ? "bg-[#E1306C] text-white"
+                        : effectiveIgPostType === "carousel" ? "bg-[#7C3AED] text-white"
+                        : "bg-[#0A0A0A] text-[#F9F9F7]"
+                    )}>
+                      {effectiveIgPostType === "reel" ? "REEL" : effectiveIgPostType === "carousel" ? "CAROUSEL" : "POST"}
                     </span>
                   </div>
 
@@ -998,7 +1097,8 @@ export default function ComposePage() {
                       canDrag && isDragging && "cursor-grabbing"
                     )}
                     style={{
-                      aspectRatio: aspectMode === "square" ? "1/1"
+                      aspectRatio: effectiveIgPostType === "reel" ? "9/16"
+                        : aspectMode === "square" ? "1/1"
                         : aspectMode === "portrait" ? "4/5"
                         : aspectMode === "landscape" ? "1.91/1"
                         : "1/1",
