@@ -97,6 +97,33 @@ export const PLATFORMS = [
     textColor: "#F9F9F7",
     comingSoon: true,
   },
+  {
+    id: "twitch",
+    name: "Twitch",
+    description: "Go live & post updates",
+    icon: "TV",
+    color: "#9146FF",
+    textColor: "#F9F9F7",
+    comingSoon: true,
+  },
+  {
+    id: "bluesky",
+    name: "Bluesky",
+    description: "Post to the open social web",
+    icon: "BS",
+    color: "#0085FF",
+    textColor: "#F9F9F7",
+    comingSoon: true,
+  },
+  {
+    id: "mastodon",
+    name: "Mastodon",
+    description: "Toot to the fediverse",
+    icon: "M",
+    color: "#6364FF",
+    textColor: "#F9F9F7",
+    comingSoon: true,
+  },
 ] as const;
 
 export type Platform = (typeof PLATFORMS)[number];

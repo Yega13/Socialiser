@@ -197,7 +197,7 @@ export default function ComposePage() {
   const [videoTime, setVideoTime] = useState(0);
   const [previewTab, setPreviewTab] = useState<string>("instagram");
   const [moderationError, setModerationError] = useState<string | null>(null);
-  const [igPostType, setIgPostType] = useState<"post" | "reel">("post");
+  const [igPostType, setIgPostType] = useState<"post" | "reel" | "story">("post");
   const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -588,11 +588,11 @@ export default function ComposePage() {
   const isCarousel = mediaItems.length > 1;
   const hasSingleVideo = mediaItems.length === 1 && mediaItems[0]?.file.type.startsWith("video/");
   const hasSingleImage = mediaItems.length === 1 && mediaItems[0]?.file.type.startsWith("image/");
-  // Carousel = always "post", single image = always "post", single video = user chooses
-  const showIgPostTypePicker = instagramSelected && hasSingleVideo;
-  const effectiveIgPostType: "post" | "reel" | "carousel" = isCarousel
+  // Carousel = always "post", single media = user chooses post type
+  const showIgPostTypePicker = instagramSelected && (hasSingleVideo || hasSingleImage);
+  const effectiveIgPostType: "post" | "reel" | "story" | "carousel" = isCarousel
     ? "carousel"
-    : hasSingleVideo
+    : (hasSingleVideo || hasSingleImage)
     ? igPostType
     : "post";
 
@@ -746,12 +746,9 @@ export default function ComposePage() {
               {isCarousel && (
                 <span className="font-normal text-[var(--color-gray-500)] ml-2">Carousel — always posted as feed post</span>
               )}
-              {hasSingleImage && (
-                <span className="font-normal text-[var(--color-gray-500)] ml-2">Image — posted as feed post</span>
-              )}
             </label>
             {showIgPostTypePicker ? (
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <button
                   onClick={() => setIgPostType("post")}
                   className={cn(
@@ -761,27 +758,41 @@ export default function ComposePage() {
                       : "bg-[var(--color-base-white)] text-[var(--color-base-black)] shadow-[2px_2px_0px_0px_var(--color-base-black)] opacity-50 hover:opacity-75"
                   )}
                 >
-                  <span className="text-base leading-none">▶</span>
-                  Video Post
+                  <span className="text-base leading-none">{hasSingleVideo ? "▶" : "◻"}</span>
+                  {hasSingleVideo ? "Video Post" : "Feed Post"}
                 </button>
+                {hasSingleVideo && (
+                  <button
+                    onClick={() => setIgPostType("reel")}
+                    className={cn(
+                      "flex items-center gap-2 px-4 py-2.5 border border-[var(--color-base-black)] text-sm font-bold transition-all",
+                      igPostType === "reel"
+                        ? "bg-[var(--color-base-black)] text-[var(--color-base-white)] shadow-[2px_2px_0px_0px_#C8FF00]"
+                        : "bg-[var(--color-base-white)] text-[var(--color-base-black)] shadow-[2px_2px_0px_0px_var(--color-base-black)] opacity-50 hover:opacity-75"
+                    )}
+                  >
+                    <span className="text-base leading-none">♫</span>
+                    Reel
+                  </button>
+                )}
                 <button
-                  onClick={() => setIgPostType("reel")}
+                  onClick={() => setIgPostType("story")}
                   className={cn(
                     "flex items-center gap-2 px-4 py-2.5 border border-[var(--color-base-black)] text-sm font-bold transition-all",
-                    igPostType === "reel"
+                    igPostType === "story"
                       ? "bg-[var(--color-base-black)] text-[var(--color-base-white)] shadow-[2px_2px_0px_0px_#C8FF00]"
                       : "bg-[var(--color-base-white)] text-[var(--color-base-black)] shadow-[2px_2px_0px_0px_var(--color-base-black)] opacity-50 hover:opacity-75"
                   )}
                 >
-                  <span className="text-base leading-none">♫</span>
-                  Reel
+                  <span className="text-base leading-none">◎</span>
+                  Story
                 </button>
               </div>
             ) : (
               <div className="flex gap-2">
                 <div className="flex items-center gap-2 px-4 py-2.5 border border-[var(--color-base-black)] bg-[var(--color-base-black)] text-[var(--color-base-white)] text-sm font-bold shadow-[2px_2px_0px_0px_#C8FF00]">
-                  <span className="text-base leading-none">{isCarousel ? "⊞" : "◻"}</span>
-                  {isCarousel ? `Carousel · ${mediaItems.length} items` : "Feed Post"}
+                  <span className="text-base leading-none">⊞</span>
+                  {`Carousel · ${mediaItems.length} items`}
                 </div>
               </div>
             )}
@@ -790,9 +801,9 @@ export default function ComposePage() {
                 Reels appear in the Reels tab and can reach non-followers.
               </p>
             )}
-            {igPostType === "post" && hasSingleVideo && (
+            {igPostType === "story" && (
               <p className="text-xs text-[var(--color-gray-500)] mt-2">
-                Video post appears on your profile grid.
+                Story disappears after 24 hours. No stickers, music, or polls via API.
               </p>
             )}
           </div>
