@@ -107,7 +107,7 @@ export async function postToInstagramServer(
   caption: string,
   mediaUrl: string,
   isVideo: boolean,
-  postType: "post" | "reel" = "reel"
+  postType: "post" | "reel" | "story" = "reel"
 ): Promise<{ success: boolean; error?: string }> {
   try {
     // Verify the URL is accessible before sending to Instagram
@@ -119,8 +119,20 @@ export async function postToInstagramServer(
       };
     }
 
-    const params: Record<string, string> = { caption };
-    if (isVideo) {
+    const params: Record<string, string> = {};
+    // Stories don't support captions via API
+    if (postType !== "story") {
+      params.caption = caption;
+    }
+
+    if (postType === "story") {
+      params.media_type = "STORIES";
+      if (isVideo) {
+        params.video_url = mediaUrl;
+      } else {
+        params.image_url = mediaUrl;
+      }
+    } else if (isVideo) {
       params.media_type = postType === "reel" ? "REELS" : "VIDEO";
       params.video_url = mediaUrl;
     } else {
@@ -404,7 +416,7 @@ export async function processScheduledPosts(): Promise<{ processed: number }> {
           }
         }
 
-        const igPostType = (post.ig_post_type as "post" | "reel" | undefined) ?? "reel";
+        const igPostType = (post.ig_post_type as "post" | "reel" | "story" | undefined) ?? "reel";
         if (items.length === 1) {
           results[platformId] = await postToInstagramServer(
             accessToken, conn.platform_user_id, caption, items[0].url, items[0].isVideo, igPostType

@@ -433,8 +433,12 @@ export default function ComposePage() {
 
             if (uploadedItems.length === 1) {
               // Single post
-              const typeLabel = uploadedItems[0].isVideo
-                ? (effectiveIgPostType === "reel" ? "Publishing reel..." : "Publishing video post...")
+              const typeLabel = effectiveIgPostType === "story"
+                ? "Publishing story..."
+                : effectiveIgPostType === "reel"
+                ? "Publishing reel..."
+                : uploadedItems[0].isVideo
+                ? "Publishing video post..."
                 : "Publishing to Instagram...";
               setPostingStatus(typeLabel);
               postResults[platformId] = await postToInstagramServer(
@@ -443,7 +447,7 @@ export default function ComposePage() {
                 caption,
                 uploadedItems[0].url,
                 uploadedItems[0].isVideo,
-                effectiveIgPostType === "reel" ? "reel" : "post"
+                effectiveIgPostType === "reel" ? "reel" : effectiveIgPostType === "story" ? "story" : "post"
               );
             } else {
               // Carousel post
@@ -1028,6 +1032,8 @@ export default function ComposePage() {
                 ? `Post carousel to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`
                 : instagramSelected && effectiveIgPostType === "reel"
                 ? `Post reel${selected.length > 1 ? ` + ${selected.length - 1} more` : ""}`
+                : instagramSelected && effectiveIgPostType === "story"
+                ? `Post story${selected.length > 1 ? ` + ${selected.length - 1} more` : ""}`
                 : `Post to ${selected.length} platform${selected.length !== 1 ? "s" : ""}`}
             </button>
             {isPosting && postingStatus && (
@@ -1092,10 +1098,11 @@ export default function ComposePage() {
                     <span className={cn(
                       "ml-auto text-[10px] font-bold px-1.5 py-0.5",
                       effectiveIgPostType === "reel" ? "bg-[#E1306C] text-white"
+                        : effectiveIgPostType === "story" ? "bg-gradient-to-r from-[#FCAF45] via-[#E1306C] to-[#833AB4] text-white"
                         : effectiveIgPostType === "carousel" ? "bg-[#7C3AED] text-white"
                         : "bg-[#0A0A0A] text-[#F9F9F7]"
                     )}>
-                      {effectiveIgPostType === "reel" ? "REEL" : effectiveIgPostType === "carousel" ? "CAROUSEL" : "POST"}
+                      {effectiveIgPostType === "reel" ? "REEL" : effectiveIgPostType === "story" ? "STORY" : effectiveIgPostType === "carousel" ? "CAROUSEL" : "POST"}
                     </span>
                   </div>
 
@@ -1108,7 +1115,7 @@ export default function ComposePage() {
                       canDrag && isDragging && "cursor-grabbing"
                     )}
                     style={{
-                      aspectRatio: effectiveIgPostType === "reel" ? "9/16"
+                      aspectRatio: (effectiveIgPostType === "reel" || effectiveIgPostType === "story") ? "9/16"
                         : aspectMode === "square" ? "1/1"
                         : aspectMode === "portrait" ? "4/5"
                         : aspectMode === "landscape" ? "1.91/1"
