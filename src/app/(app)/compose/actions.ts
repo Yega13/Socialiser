@@ -69,8 +69,8 @@ async function waitForContainer(
 ): Promise<string | null> {
   let lastStatus = "UNKNOWN";
   let apiErrors = 0;
-  // 150 iterations × 2s = 5 minutes
-  for (let i = 0; i < 150; i++) {
+  // 240 iterations × 2s = 8 minutes (large videos need time)
+  for (let i = 0; i < 240; i++) {
     await new Promise((r) => setTimeout(r, 2000));
     try {
       const res = await fetch(
@@ -97,7 +97,7 @@ async function waitForContainer(
       apiErrors++;
     }
   }
-  return `Media processing timed out (5min). Last status: ${lastStatus}, API errors: ${apiErrors}`;
+  return `Media processing timed out (8min). Last status: ${lastStatus}, API errors: ${apiErrors}`;
 }
 
 // Single image or video post
@@ -198,10 +198,16 @@ export async function postCarouselToInstagram(
       containers.push({ id: container.id, index: i });
     }
 
-    // Step 2: Wait for ALL containers to finish processing
-    for (const c of containers) {
-      const waitErr = await waitForContainer(accessToken, c.id);
-      if (waitErr) return { success: false, error: `Item ${c.index + 1}: ${waitErr}` };
+    // Step 2: Wait for ALL containers IN PARALLEL (Instagram processes simultaneously)
+    const waitResults = await Promise.all(
+      containers.map(async (c) => ({
+        index: c.index,
+        error: await waitForContainer(accessToken, c.id),
+      }))
+    );
+    const firstFailure = waitResults.find((r) => r.error);
+    if (firstFailure) {
+      return { success: false, error: `Item ${firstFailure.index + 1}: ${firstFailure.error}` };
     }
 
     // Step 3: Create carousel container
