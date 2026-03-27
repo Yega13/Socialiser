@@ -285,22 +285,21 @@ export default async function CronPage({
           const igPostType =
             (post.ig_post_type as "post" | "reel" | "story") ?? "reel";
 
-          // Resolve all media URLs to signed URLs
-          const items: { url: string; isVideo: boolean }[] = [];
-          for (let i = 0; i < (post.media_urls as string[]).length; i++) {
-            const url = await resolve((post.media_urls as string[])[i]);
-            if (!url) {
-              fatalError = `Instagram: Failed to resolve URL for item ${i + 1}`;
-              break;
-            }
-            items.push({
-              url,
+          // Resolve all media URLs in parallel
+          const resolvedItems = await Promise.all(
+            (post.media_urls as string[]).map(async (stored, i) => ({
+              url: await resolve(stored),
               isVideo:
                 (post.media_types as string[] | null)?.[i]?.startsWith(
                   "video/"
                 ) ?? false,
-            });
+            }))
+          );
+          const failedUrlIdx = resolvedItems.findIndex((item) => !item.url);
+          if (failedUrlIdx !== -1) {
+            fatalError = `Instagram: Failed to resolve URL for item ${failedUrlIdx + 1}`;
           }
+          const items = resolvedItems;
 
           if (!fatalError) {
             if (items.length === 1) {
@@ -338,32 +337,32 @@ export default async function CronPage({
                 );
               }
             } else {
-              // Carousel: create child containers now; parent created in POLL
+              // Carousel: create all child containers in parallel
               // (IG requires all children to be FINISHED before creating parent)
-              const childIds: string[] = [];
-              for (let i = 0; i < items.length; i++) {
-                const item = items[i];
-                const params: Record<string, string> = {
-                  is_carousel_item: "true",
-                };
-                if (item.isVideo) {
-                  params.media_type = "VIDEO";
-                  params.video_url = item.url;
-                } else {
-                  params.image_url = item.url;
-                }
-                const container = await createIgContainer(
-                  accessToken,
-                  conn.platform_user_id,
-                  params
-                );
-                if (!container.id) {
-                  fatalError = `Instagram: Carousel item ${i + 1}: ${container.error}`;
-                  break;
-                }
-                childIds.push(container.id);
-              }
-              if (!fatalError) {
+              const containerResults = await Promise.all(
+                items.map(async (item, i) => {
+                  const params: Record<string, string> = {
+                    is_carousel_item: "true",
+                  };
+                  if (item.isVideo) {
+                    params.media_type = "VIDEO";
+                    params.video_url = item.url;
+                  } else {
+                    params.image_url = item.url;
+                  }
+                  const result = await createIgContainer(
+                    accessToken,
+                    conn.platform_user_id,
+                    params
+                  );
+                  return { index: i, ...result };
+                })
+              );
+              const failedItem = containerResults.find((r) => !r.id);
+              if (failedItem) {
+                fatalError = `Instagram: Carousel item ${failedItem.index + 1}: ${failedItem.error}`;
+              } else {
+                const childIds = containerResults.map((r) => r.id as string);
                 preparedContainers.instagram = {
                   type: "carousel",
                   childIds,
@@ -433,7 +432,13 @@ export default async function CronPage({
     let ready = false;
 
     if (!igState) {
-      error = "Instagram: Container data missing";
+      // PREPARE didn't finish (cron timed out mid-work) — reset to retry
+      await supabase
+        .from("scheduled_posts")
+        .update({ status: "pending" })
+        .eq("id", post.id);
+      log.push(`"${post.title}": containers missing, reset to pending for retry`);
+      continue;
     } else if (!conn || !conn.platform_user_id) {
       error = "Instagram: Not connected";
     } else {
