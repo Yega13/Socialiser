@@ -723,7 +723,7 @@ function PostCard({
           <button
             onClick={async () => {
               if (!rescheduleDate) return;
-              await onReschedule(rescheduleDate);
+              await onReschedule?.(rescheduleDate);
               setShowReschedule(false);
               setRescheduleDate("");
             }}
