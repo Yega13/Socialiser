@@ -50,28 +50,33 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 
 ---
 
-## MAJOR BUG: Scheduling Is Unreliable
+## Scheduling: FIXED (2026-03-27)
 
-**This is the #1 priority to fix.** The scheduling system has delays and errors. The current flow:
-1. User creates a scheduled post → stored in `scheduled_posts` table with status "pending"
-2. A cron endpoint (`/cron`) processes overdue posts
-3. The cron calls `processScheduledPosts()` in `src/app/(app)/compose/actions.ts`
+The scheduling system was rewritten as a state machine. Root cause was that the old cron page used `setTimeout` for up to 15-minute waits, which is impossible in Cloudflare Workers (30s HTTP timeout). Now each cron run is always < 30s.
 
-**Known issues:**
-- Posts don't always go out on time — delays between scheduled time and actual posting
-- Sometimes posts fail silently
-- The cron reliability on Cloudflare Workers may be the root cause
-- Token refresh during scheduled post processing may fail
-- Need to investigate: is the cron being called reliably? Are there timeout issues on CF Workers?
+**New state machine:**
+- `pending` → cron creates IG containers (fast API call) → `preparing`
+- `preparing` → cron polls container status (one API call) → `prepared`
+- `prepared` → cron publishes at exact scheduled time → `completed`
+- YouTube-only posts skip straight to `prepared` (upload happens at publish time)
 
-**Files involved:**
-- `src/app/(app)/compose/actions.ts` — `processScheduledPosts()` function (line ~228)
-- `src/app/(app)/compose/page.tsx` — `handleSchedule()` function
-- `src/app/cron/` — the cron endpoint
-- `src/app/(app)/scheduled/` — scheduled posts page
-- `supabase/schema.sql` — `scheduled_posts` table
+**DB migration required (run once in Supabase SQL Editor):**
+```sql
+UPDATE public.scheduled_posts SET status = 'pending' WHERE status = 'processing';
+ALTER TABLE public.scheduled_posts DROP CONSTRAINT IF EXISTS scheduled_posts_status_check;
+ALTER TABLE public.scheduled_posts ADD CONSTRAINT scheduled_posts_status_check
+  CHECK (status IN ('pending', 'preparing', 'prepared', 'publishing', 'completed', 'failed'));
+ALTER TABLE public.scheduled_posts ADD COLUMN IF NOT EXISTS prepared_containers JSONB;
+DROP INDEX IF EXISTS idx_scheduled_pending;
+CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, status)
+  WHERE status IN ('pending', 'preparing', 'prepared');
+```
 
-**The user considers this the biggest problem with the product right now. Fix this before adding new features.**
+**Files changed:**
+- `src/app/cron/page.tsx` — complete rewrite (state machine, 3 fast steps)
+- `src/app/(app)/scheduled/page.tsx` — handles new statuses (preparing/prepared/publishing)
+- `src/app/(app)/compose/actions.ts` — removed old broken `processScheduledPosts()`
+- `supabase/schema.sql` — updated schema with migration comments
 
 ---
 
@@ -160,13 +165,8 @@ This column ALREADY EXISTS in the live database. Don't try to add it again.
 
 ## What To Do Next (Priority Order)
 
-### 1. FIX SCHEDULING (Critical)
-The scheduling system is unreliable. This must be fixed before anything else. Investigate:
-- Is the cron endpoint being called reliably on Cloudflare Workers?
-- Are there timeout issues with `processScheduledPosts()`?
-- Token refresh failures during scheduled posting?
-- Silent failures — need better error logging and status reporting
-- Consider: should we move to a more reliable scheduling mechanism?
+### 1. Run the DB migration (Critical — do before deploying)
+The migration SQL is in the "Scheduling: FIXED" section above. Run it in Supabase Dashboard → SQL Editor.
 
 ### 2. Landing Page Improvements
 - Add FAQ section (SEO + user trust)

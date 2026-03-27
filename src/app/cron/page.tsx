@@ -1,22 +1,36 @@
 import { createClient } from "@supabase/supabase-js";
 
-// Fully self-contained cron page — no imports from "use server" files.
-// An external cron service hits this URL every minute with the secret key.
-//
-// TWO-PHASE SCHEDULING:
-//   Phase 1 (PREPARE): Pick up posts up to 6 min before scheduled_at.
-//     Create media containers, upload videos, wait for IG processing.
-//     All heavy work happens here — BEFORE the scheduled time.
-//   Phase 2 (PUBLISH): Sleep until exact scheduled_at, then fire the
-//     lightweight publish/upload call. Posts go out on the exact second.
-
 export const dynamic = "force-dynamic";
 
-// ── Token refresh helpers ────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════
+// STATE-MACHINE CRON — Cloudflare Workers compatible (each run < 30s)
+//
+// Three fast steps per cron run, no sleeping, no long waits:
+//   Step 1 PREPARE:  pending → preparing   (create IG containers, kick off processing)
+//   Step 2 POLL:     preparing → prepared  (check container status, < 3 API calls)
+//   Step 3 PUBLISH:  prepared → completed  (publish at scheduled time)
+//
+// State persists in prepared_containers JSONB column between runs.
+// Run every minute via external cron service.
+// ═══════════════════════════════════════════════════════════════════════════
 
-async function refreshYouTubeToken(
-  refreshToken: string
-): Promise<string | null> {
+type IgContainerState = {
+  type: "single" | "carousel";
+  containerId?: string; // main container (single) or carousel parent
+  childIds?: string[]; // carousel child containers only
+  ready: boolean;
+};
+
+type PreparedContainers = {
+  instagram?: IgContainerState;
+};
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+type Row = Record<string, any>;
+
+// ── Token helpers ────────────────────────────────────────────────────────────
+
+async function refreshYouTubeToken(refreshToken: string): Promise<string | null> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -51,7 +65,7 @@ async function refreshInstagramToken(
   return null;
 }
 
-// ── Instagram container helpers ──────────────────────────────────
+// ── Instagram API helpers ────────────────────────────────────────────────────
 
 async function createIgContainer(
   accessToken: string,
@@ -71,7 +85,7 @@ async function createIgContainer(
   try {
     data = JSON.parse(text);
   } catch {
-    return { error: `API non-JSON (${res.status}): ${text.slice(0, 200)}` };
+    return { error: `Non-JSON (${res.status}): ${text.slice(0, 200)}` };
   }
   if (!data.id) {
     const detail = data.error
@@ -82,143 +96,31 @@ async function createIgContainer(
   return { id: data.id };
 }
 
-async function waitForContainer(
+async function checkIgContainerStatus(
   accessToken: string,
   containerId: string
-): Promise<string | null> {
-  let lastStatus = "UNKNOWN";
-  let apiErrors = 0;
-  // 240 iterations × 2s = 8 minutes max wait (large videos need time)
-  for (let i = 0; i < 240; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    try {
-      const res = await fetch(
-        `https://graph.instagram.com/v21.0/${containerId}?fields=status_code,status&access_token=${accessToken}`
-      );
-      if (!res.ok) {
-        apiErrors++;
-        if (res.status === 429) await new Promise((r) => setTimeout(r, 5000));
-        continue;
-      }
-      const data = await res.json();
-      if (data.error) {
-        apiErrors++;
-        continue;
-      }
-      lastStatus = data.status_code || "UNKNOWN";
-      if (data.status_code === "FINISHED") return null;
-      if (data.status_code === "ERROR")
-        return `Media processing failed${data.status ? `: ${data.status}` : ""}`;
-      if (data.status_code === "EXPIRED") return "Media container expired";
-    } catch {
-      apiErrors++;
-    }
+): Promise<"FINISHED" | "ERROR" | "EXPIRED" | "IN_PROGRESS"> {
+  try {
+    const res = await fetch(
+      `https://graph.instagram.com/v21.0/${containerId}?fields=status_code&access_token=${accessToken}`
+    );
+    if (!res.ok) return "IN_PROGRESS";
+    const data = await res.json();
+    if (data.status_code === "FINISHED") return "FINISHED";
+    if (data.status_code === "ERROR") return "ERROR";
+    if (data.status_code === "EXPIRED") return "EXPIRED";
+    return "IN_PROGRESS";
+  } catch {
+    return "IN_PROGRESS";
   }
-  return `Media processing timed out (8min). Last status: ${lastStatus}, API errors: ${apiErrors}`;
 }
 
-// ── Phase 1: PREPARE (heavy work — runs before scheduled time) ──
-
-/** Prepare a single IG post/reel/story — returns containerId ready to publish */
-async function prepareInstagramSingle(
-  accessToken: string,
-  igUserId: string,
-  caption: string,
-  mediaUrl: string,
-  isVideo: boolean,
-  postType: "post" | "reel" | "story"
-): Promise<{ containerId?: string; error?: string }> {
-  const params: Record<string, string> = {};
-  // Stories don't support captions via API
-  if (postType !== "story") params.caption = caption;
-
-  if (postType === "story") {
-    params.media_type = "STORIES";
-    if (isVideo) params.video_url = mediaUrl;
-    else params.image_url = mediaUrl;
-  } else if (isVideo) {
-    params.media_type = postType === "reel" ? "REELS" : "VIDEO";
-    params.video_url = mediaUrl;
-  } else {
-    params.image_url = mediaUrl;
-  }
-
-  const container = await createIgContainer(accessToken, igUserId, params);
-  if (!container.id) return { error: container.error };
-
-  const waitErr = await waitForContainer(accessToken, container.id);
-  if (waitErr) return { error: waitErr };
-
-  return { containerId: container.id };
-}
-
-/** Prepare a carousel — returns the carousel containerId ready to publish */
-async function prepareInstagramCarousel(
-  accessToken: string,
-  igUserId: string,
-  caption: string,
-  items: { url: string; isVideo: boolean }[]
-): Promise<{ containerId?: string; error?: string }> {
-  if (items.length < 2 || items.length > 10) {
-    return { error: "Carousel requires 2-10 items" };
-  }
-
-  // Create ALL child containers
-  const containers: { id: string; index: number }[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const item = items[i];
-    const params: Record<string, string> = { is_carousel_item: "true" };
-    if (item.isVideo) {
-      params.media_type = "VIDEO";
-      params.video_url = item.url;
-    } else {
-      params.image_url = item.url;
-    }
-    const container = await createIgContainer(accessToken, igUserId, params);
-    if (!container.id)
-      return { error: `Item ${i + 1}: ${container.error}` };
-    containers.push({ id: container.id, index: i });
-  }
-
-  // Wait for ALL containers IN PARALLEL (Instagram processes them simultaneously)
-  const waitResults = await Promise.all(
-    containers.map(async (c) => ({
-      index: c.index,
-      error: await waitForContainer(accessToken, c.id),
-    }))
-  );
-  const firstFailure = waitResults.find((r) => r.error);
-  if (firstFailure) {
-    return { error: `Item ${firstFailure.index + 1}: ${firstFailure.error}` };
-  }
-
-  // Create carousel container
-  const carouselContainer = await createIgContainer(accessToken, igUserId, {
-    media_type: "CAROUSEL",
-    caption,
-    children: containers.map((c) => c.id).join(","),
-  });
-  if (!carouselContainer.id) return { error: carouselContainer.error };
-
-  // Wait for carousel container
-  const carouselWaitErr = await waitForContainer(
-    accessToken,
-    carouselContainer.id
-  );
-  if (carouselWaitErr) return { error: `Carousel: ${carouselWaitErr}` };
-
-  return { containerId: carouselContainer.id };
-}
-
-// ── Phase 2: PUBLISH (lightweight — runs at exact scheduled time) ──
-
-/** Publish an already-prepared IG container */
-async function publishInstagramContainer(
+async function publishIgContainer(
   accessToken: string,
   igUserId: string,
   containerId: string
 ): Promise<{ success: boolean; error?: string }> {
-  const publishRes = await fetch(
+  const res = await fetch(
     `https://graph.instagram.com/v21.0/${igUserId}/media_publish`,
     {
       method: "POST",
@@ -229,27 +131,18 @@ async function publishInstagramContainer(
       }),
     }
   );
-  const publishData = await publishRes.json();
-  if (!publishData.id) {
+  const data = await res.json();
+  if (!data.id) {
     return {
       success: false,
       error:
-        publishData.error?.message ??
-        `Publish failed: ${JSON.stringify(publishData)}`,
+        data.error?.message ?? `Publish failed: ${JSON.stringify(data)}`,
     };
   }
   return { success: true };
 }
 
-// ── Sleep helper ─────────────────────────────────────────────────
-
-/** Sleep until the exact target time. No-ops if target is in the past. */
-async function sleepUntil(targetMs: number): Promise<void> {
-  const delay = targetMs - Date.now();
-  if (delay > 0) await new Promise((r) => setTimeout(r, delay));
-}
-
-// ── Main cron page ──────────────────────────────────────────────
+// ── Main cron page ───────────────────────────────────────────────────────────
 
 export default async function CronPage({
   searchParams,
@@ -257,45 +150,95 @@ export default async function CronPage({
   searchParams: Promise<{ key?: string }>;
 }) {
   const { key } = await searchParams;
-
-  const envName = "CRON_SECRET";
-  const secret = process.env[envName];
-  if (!key || key !== secret) {
+  if (!key || key !== process.env.CRON_SECRET) {
     return <p>Unauthorized</p>;
   }
 
-  // Admin client (service role bypasses RLS)
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // Helper: resolve a stored value (path or legacy URL) to a signed URL
-  async function resolveToSignedUrl(stored: string): Promise<string> {
+  const log: string[] = [`${new Date().toISOString()} — Cron start`];
+  const now = new Date();
+
+  // Helper: resolve a storage path or legacy URL to a 2-hour signed URL
+  async function resolve(stored: string): Promise<string> {
     if (!stored.startsWith("http")) {
       const { data } = await supabase.storage
         .from("media")
-        .createSignedUrl(stored, 3600);
+        .createSignedUrl(stored, 7200);
       return data?.signedUrl || "";
     }
-    const pathMatch = stored.match(
+    const m = stored.match(
       /\/storage\/v1\/object\/(?:public|sign)\/media\/([^?]+)/
     );
-    if (pathMatch) {
+    if (m) {
       const { data } = await supabase.storage
         .from("media")
-        .createSignedUrl(decodeURIComponent(pathMatch[1]), 3600);
+        .createSignedUrl(decodeURIComponent(m[1]), 7200);
       return data?.signedUrl || stored;
     }
     return stored;
   }
 
-  // ── Fetch posts due within the next 15 minutes ─────────────────
-  // Images prep in <5s so extra window is harmless.
-  // Video carousels (up to 10 items) need the full window for processing.
-  const now = new Date();
-  const windowEnd = new Date(now.getTime() + 15 * 60 * 1000);
-  const { data: posts, error: fetchErr } = await supabase
+  // Helper: get a valid access token, refreshing if expired
+  async function getFreshToken(
+    conn: Row,
+    platformId: string
+  ): Promise<string | null> {
+    const isExpired =
+      conn.token_expires_at &&
+      new Date(conn.token_expires_at as string) <= new Date();
+    if (!isExpired) return conn.access_token as string;
+
+    if (platformId === "youtube" && conn.refresh_token) {
+      const newToken = await refreshYouTubeToken(conn.refresh_token as string);
+      if (newToken) {
+        await supabase
+          .from("connected_platforms")
+          .update({
+            access_token: newToken,
+            token_expires_at: new Date(
+              Date.now() + 3600 * 1000
+            ).toISOString(),
+          })
+          .eq("id", conn.id);
+        return newToken;
+      }
+      return null;
+    }
+
+    if (platformId === "instagram") {
+      const refreshed = await refreshInstagramToken(
+        conn.access_token as string
+      );
+      if (refreshed) {
+        await supabase
+          .from("connected_platforms")
+          .update({
+            access_token: refreshed.access_token,
+            token_expires_at: new Date(
+              Date.now() + refreshed.expires_in * 1000
+            ).toISOString(),
+          })
+          .eq("id", conn.id);
+        return refreshed.access_token;
+      }
+      return null;
+    }
+
+    return conn.access_token as string;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // STEP 1: PREPARE (pending → preparing)
+  // Create IG containers for posts due in the next 20 minutes.
+  // Fast: just creates containers (kicks off IG processing), then done.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  const windowEnd = new Date(now.getTime() + 20 * 60 * 1000);
+  const { data: pendingPosts } = await supabase
     .from("scheduled_posts")
     .select("*")
     .eq("status", "pending")
@@ -303,115 +246,390 @@ export default async function CronPage({
     .order("scheduled_at", { ascending: true })
     .limit(10);
 
-  if (fetchErr || !posts || posts.length === 0) {
-    return (
-      <p>
-        OK: 0 found.{" "}
-        {fetchErr ? `Error: ${fetchErr.message}` : "No posts due."}
-      </p>
-    );
-  }
-
-  const log: string[] = [
-    `${now.toISOString()} — Found ${posts.length} post(s) due within 15 min`,
-  ];
-  let processed = 0;
-
-  for (const post of posts) {
-    const scheduledTime = new Date(post.scheduled_at).getTime();
-
-    // ── Claim post (optimistic lock) ──
+  for (const post of pendingPosts ?? []) {
+    // Optimistic lock: claim before processing
     const { data: claimed } = await supabase
       .from("scheduled_posts")
-      .update({ status: "processing" })
+      .update({ status: "preparing" })
       .eq("id", post.id)
       .eq("status", "pending")
       .select("id");
+    if (!claimed?.length) continue;
 
-    if (!claimed || claimed.length === 0) {
-      log.push(`"${post.title}": skipped (already claimed)`);
-      continue;
-    }
-
-    // ── Fetch user's connected platforms ──
-    const { data: connectedPlatforms } = await supabase
+    const { data: connPlatforms } = await supabase
       .from("connected_platforms")
       .select("*")
       .eq("user_id", post.user_id)
       .eq("is_active", true);
 
-    // Track prepared state per platform
-    const prepared: Record<
-      string,
-      | { type: "ig"; containerId: string }
-      | { type: "yt"; videoBlob: Blob; metadata: object; thumbBlob?: Blob }
-      | { type: "error"; error: string }
-    > = {};
+    const preparedContainers: PreparedContainers = {};
+    let fatalError: string | null = null;
+    const hasIg = (post.platforms as string[]).includes("instagram");
 
-    // ═══════════════════════════════════════════════════════════════
-    // PHASE 1: PREPARE — heavy work, runs before scheduled time
-    // ═══════════════════════════════════════════════════════════════
-
-    for (const platformId of post.platforms as string[]) {
-      const conn = connectedPlatforms?.find(
-        (c: { platform: string }) => c.platform === platformId
+    if (hasIg) {
+      const conn = connPlatforms?.find(
+        (c: Row) => c.platform === "instagram"
       );
       if (!conn) {
-        prepared[platformId] = { type: "error", error: "Not connected" };
-        continue;
-      }
+        fatalError = "Instagram: Not connected";
+      } else if (!conn.platform_user_id) {
+        fatalError = "Instagram: Account ID missing. Reconnect.";
+      } else if (!post.media_urls?.length) {
+        fatalError = "Instagram: No media files found";
+      } else {
+        const accessToken = await getFreshToken(conn, "instagram");
+        if (!accessToken) {
+          fatalError = "Instagram: Token refresh failed";
+        } else {
+          const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+          const igPostType =
+            (post.ig_post_type as "post" | "reel" | "story") ?? "reel";
 
-      let accessToken: string = conn.access_token;
-
-      // Refresh token if expired
-      if (
-        conn.token_expires_at &&
-        new Date(conn.token_expires_at) <= new Date()
-      ) {
-        if (platformId === "youtube" && conn.refresh_token) {
-          const newToken = await refreshYouTubeToken(conn.refresh_token);
-          if (newToken) {
-            accessToken = newToken;
-            await supabase
-              .from("connected_platforms")
-              .update({
-                access_token: newToken,
-                token_expires_at: new Date(
-                  Date.now() + 3600 * 1000
-                ).toISOString(),
-              })
-              .eq("id", conn.id);
-          } else {
-            prepared[platformId] = {
-              type: "error",
-              error: "Token refresh failed",
-            };
-            continue;
+          // Resolve all media URLs to signed URLs
+          const items: { url: string; isVideo: boolean }[] = [];
+          for (let i = 0; i < (post.media_urls as string[]).length; i++) {
+            const url = await resolve((post.media_urls as string[])[i]);
+            if (!url) {
+              fatalError = `Instagram: Failed to resolve URL for item ${i + 1}`;
+              break;
+            }
+            items.push({
+              url,
+              isVideo:
+                (post.media_types as string[] | null)?.[i]?.startsWith(
+                  "video/"
+                ) ?? false,
+            });
           }
-        } else if (platformId === "instagram") {
-          const refreshed = await refreshInstagramToken(accessToken);
-          if (refreshed) {
-            accessToken = refreshed.access_token;
-            await supabase
-              .from("connected_platforms")
-              .update({
-                access_token: refreshed.access_token,
-                token_expires_at: new Date(
-                  Date.now() + refreshed.expires_in * 1000
-                ).toISOString(),
-              })
-              .eq("id", conn.id);
-          } else {
-            prepared[platformId] = {
-              type: "error",
-              error: "Token refresh failed",
-            };
-            continue;
+
+          if (!fatalError) {
+            if (items.length === 1) {
+              // Single post/reel/story: create one container
+              const params: Record<string, string> = {};
+              if (igPostType !== "story") params.caption = caption;
+
+              if (igPostType === "story") {
+                params.media_type = "STORIES";
+                if (items[0].isVideo) params.video_url = items[0].url;
+                else params.image_url = items[0].url;
+              } else if (items[0].isVideo) {
+                params.media_type =
+                  igPostType === "reel" ? "REELS" : "VIDEO";
+                params.video_url = items[0].url;
+              } else {
+                params.image_url = items[0].url;
+              }
+
+              const container = await createIgContainer(
+                accessToken,
+                conn.platform_user_id,
+                params
+              );
+              if (!container.id) {
+                fatalError = `Instagram: ${container.error}`;
+              } else {
+                preparedContainers.instagram = {
+                  type: "single",
+                  containerId: container.id,
+                  ready: false,
+                };
+                log.push(
+                  `"${post.title}" IG single container: ${container.id}`
+                );
+              }
+            } else {
+              // Carousel: create child containers now; parent created in POLL
+              // (IG requires all children to be FINISHED before creating parent)
+              const childIds: string[] = [];
+              for (let i = 0; i < items.length; i++) {
+                const item = items[i];
+                const params: Record<string, string> = {
+                  is_carousel_item: "true",
+                };
+                if (item.isVideo) {
+                  params.media_type = "VIDEO";
+                  params.video_url = item.url;
+                } else {
+                  params.image_url = item.url;
+                }
+                const container = await createIgContainer(
+                  accessToken,
+                  conn.platform_user_id,
+                  params
+                );
+                if (!container.id) {
+                  fatalError = `Instagram: Carousel item ${i + 1}: ${container.error}`;
+                  break;
+                }
+                childIds.push(container.id);
+              }
+              if (!fatalError) {
+                preparedContainers.instagram = {
+                  type: "carousel",
+                  childIds,
+                  ready: false,
+                };
+                log.push(
+                  `"${post.title}" IG carousel: ${childIds.length} child containers created`
+                );
+              }
+            }
           }
         }
       }
+    }
 
-      // ── Prepare YouTube ──
+    if (fatalError) {
+      await supabase
+        .from("scheduled_posts")
+        .update({ status: "failed", results: { error: fatalError } })
+        .eq("id", post.id);
+      log.push(`"${post.title}": PREPARE FAILED — ${fatalError}`);
+    } else if (!hasIg) {
+      // YouTube-only posts: skip straight to prepared (upload happens at publish time)
+      await supabase
+        .from("scheduled_posts")
+        .update({ status: "prepared" })
+        .eq("id", post.id);
+      log.push(`"${post.title}": → prepared (YouTube only)`);
+    } else {
+      await supabase
+        .from("scheduled_posts")
+        .update({
+          status: "preparing",
+          prepared_containers: preparedContainers,
+        })
+        .eq("id", post.id);
+      log.push(`"${post.title}": → preparing`);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // STEP 2: POLL (preparing → prepared)
+  // Check IG container status. For carousels: create parent when children done.
+  // Fast: one status check API call per container.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  const { data: preparingPosts } = await supabase
+    .from("scheduled_posts")
+    .select("*")
+    .eq("status", "preparing")
+    .limit(20);
+
+  for (const post of preparingPosts ?? []) {
+    const containers = (
+      post.prepared_containers ?? {}
+    ) as PreparedContainers;
+    const igState = containers.instagram;
+
+    const { data: connPlatforms } = await supabase
+      .from("connected_platforms")
+      .select("*")
+      .eq("user_id", post.user_id)
+      .eq("is_active", true);
+
+    const conn = connPlatforms?.find((c: Row) => c.platform === "instagram");
+    let error: string | null = null;
+    let ready = false;
+
+    if (!igState) {
+      error = "Instagram: Container data missing";
+    } else if (!conn || !conn.platform_user_id) {
+      error = "Instagram: Not connected";
+    } else {
+      const accessToken = conn.access_token as string;
+
+      if (igState.type === "single" && igState.containerId) {
+        // Single post: check the one container
+        const status = await checkIgContainerStatus(
+          accessToken,
+          igState.containerId
+        );
+        if (status === "FINISHED") {
+          ready = true;
+          containers.instagram = { ...igState, ready: true };
+        } else if (status === "ERROR") {
+          error = "Instagram: Container processing failed";
+        } else if (status === "EXPIRED") {
+          error = "Instagram: Container expired";
+        }
+        // IN_PROGRESS: stay in preparing, poll next run
+      } else if (igState.type === "carousel") {
+        if (!igState.containerId) {
+          // Phase 1: children not yet done — check all child containers
+          let allChildrenDone = true;
+          for (const childId of igState.childIds ?? []) {
+            const status = await checkIgContainerStatus(
+              accessToken,
+              childId
+            );
+            if (status === "ERROR") {
+              error = `Instagram: Carousel child ${childId} failed`;
+              break;
+            }
+            if (status === "EXPIRED") {
+              error = `Instagram: Carousel child ${childId} expired`;
+              break;
+            }
+            if (status !== "FINISHED") {
+              allChildrenDone = false;
+              break;
+            }
+          }
+
+          if (!error && allChildrenDone) {
+            // All children done — create the carousel parent container
+            const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+            const result = await createIgContainer(
+              accessToken,
+              conn.platform_user_id,
+              {
+                media_type: "CAROUSEL",
+                caption,
+                children: (igState.childIds ?? []).join(","),
+              }
+            );
+            if (!result.id) {
+              error = `Instagram: Carousel parent: ${result.error}`;
+            } else {
+              containers.instagram = { ...igState, containerId: result.id };
+              log.push(
+                `"${post.title}" IG carousel parent created: ${result.id}`
+              );
+              // Check parent status immediately (often FINISHED right away)
+              const parentStatus = await checkIgContainerStatus(
+                accessToken,
+                result.id
+              );
+              if (parentStatus === "FINISHED") {
+                ready = true;
+                containers.instagram.ready = true;
+              } else if (
+                parentStatus === "ERROR" ||
+                parentStatus === "EXPIRED"
+              ) {
+                error = `Instagram: Carousel parent ${parentStatus}`;
+              }
+              // else: IN_PROGRESS, poll next run
+            }
+          }
+        } else {
+          // Phase 2: children done, checking parent container
+          const status = await checkIgContainerStatus(
+            accessToken,
+            igState.containerId
+          );
+          if (status === "FINISHED") {
+            ready = true;
+            containers.instagram = { ...igState, ready: true };
+          } else if (status === "ERROR") {
+            error = "Instagram: Carousel parent processing failed";
+          } else if (status === "EXPIRED") {
+            error = "Instagram: Carousel parent expired";
+          }
+        }
+      }
+    }
+
+    if (error) {
+      await supabase
+        .from("scheduled_posts")
+        .update({ status: "failed", results: { error } })
+        .eq("id", post.id);
+      log.push(`"${post.title}": POLL FAILED — ${error}`);
+    } else if (ready) {
+      await supabase
+        .from("scheduled_posts")
+        .update({ status: "prepared", prepared_containers: containers })
+        .eq("id", post.id);
+      log.push(`"${post.title}": → prepared`);
+    } else {
+      // Save any state progress (e.g. carousel parent ID was just created)
+      await supabase
+        .from("scheduled_posts")
+        .update({ prepared_containers: containers })
+        .eq("id", post.id);
+      log.push(`"${post.title}": still preparing...`);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════
+  // STEP 3: PUBLISH (prepared → completed)
+  // Posts are fully prepared. Publish now if scheduled time has passed.
+  // Fast for IG (one API call). YouTube upload happens here.
+  // ═══════════════════════════════════════════════════════════════════════
+
+  const { data: preparedPosts } = await supabase
+    .from("scheduled_posts")
+    .select("*")
+    .eq("status", "prepared")
+    .lte("scheduled_at", now.toISOString())
+    .order("scheduled_at", { ascending: true })
+    .limit(10);
+
+  for (const post of preparedPosts ?? []) {
+    // Optimistic lock: claim for publishing
+    const { data: claimed } = await supabase
+      .from("scheduled_posts")
+      .update({ status: "publishing" })
+      .eq("id", post.id)
+      .eq("status", "prepared")
+      .select("id");
+    if (!claimed?.length) continue;
+
+    const { data: connPlatforms } = await supabase
+      .from("connected_platforms")
+      .select("*")
+      .eq("user_id", post.user_id)
+      .eq("is_active", true);
+
+    const containers = (
+      post.prepared_containers ?? {}
+    ) as PreparedContainers;
+    const results: Record<string, { success: boolean; error?: string }> =
+      {};
+
+    for (const platformId of post.platforms as string[]) {
+      const conn = connPlatforms?.find(
+        (c: Row) => c.platform === platformId
+      );
+      if (!conn) {
+        results[platformId] = { success: false, error: "Not connected" };
+        continue;
+      }
+
+      const accessToken = await getFreshToken(conn, platformId);
+      if (!accessToken) {
+        results[platformId] = {
+          success: false,
+          error: "Token refresh failed",
+        };
+        continue;
+      }
+
+      // ── Publish Instagram ──
+      if (platformId === "instagram") {
+        const igState = containers.instagram;
+        if (!igState?.containerId) {
+          results[platformId] = {
+            success: false,
+            error: "No prepared container found",
+          };
+        } else if (!conn.platform_user_id) {
+          results[platformId] = {
+            success: false,
+            error: "Instagram account ID missing",
+          };
+        } else {
+          results[platformId] = await publishIgContainer(
+            accessToken,
+            conn.platform_user_id,
+            igState.containerId
+          );
+        }
+      }
+
+      // ── Upload to YouTube ──
       if (platformId === "youtube") {
         const videoIndex = (
           post.media_types as string[] | null
@@ -421,28 +639,25 @@ export default async function CronPage({
           videoIndex === -1 ||
           !post.media_urls?.[videoIndex]
         ) {
-          prepared[platformId] = {
-            type: "error",
+          results[platformId] = {
+            success: false,
             error: "No video file found",
           };
           continue;
         }
         try {
-          const fetchUrl = await resolveToSignedUrl(
-            post.media_urls[videoIndex]
-          );
+          const fetchUrl = await resolve(post.media_urls[videoIndex]);
           if (!fetchUrl) {
-            prepared[platformId] = {
-              type: "error",
+            results[platformId] = {
+              success: false,
               error: "Failed to create signed URL for video",
             };
             continue;
           }
-
           const videoRes = await fetch(fetchUrl);
           if (!videoRes.ok) {
-            prepared[platformId] = {
-              type: "error",
+            results[platformId] = {
+              success: false,
               error: "Failed to fetch video from storage",
             };
             continue;
@@ -456,166 +671,20 @@ export default async function CronPage({
             },
             status: { privacyStatus: "public" },
           };
-
-          // Pre-fetch thumbnail too
-          let thumbBlob: Blob | undefined;
-          if (post.thumbnail_url) {
-            const thumbFetchUrl = await resolveToSignedUrl(
-              post.thumbnail_url
-            );
-            if (thumbFetchUrl) {
-              const thumbRes = await fetch(thumbFetchUrl);
-              if (thumbRes.ok) thumbBlob = await thumbRes.blob();
-            }
-          }
-
-          prepared[platformId] = {
-            type: "yt",
-            videoBlob,
-            metadata,
-            thumbBlob,
-          };
-          log.push(`"${post.title}" YouTube: prepared (video fetched)`);
-        } catch (err) {
-          prepared[platformId] = {
-            type: "error",
-            error: err instanceof Error ? err.message : String(err),
-          };
-        }
-      }
-
-      // ── Prepare Instagram ──
-      if (platformId === "instagram") {
-        if (!post.media_urls || post.media_urls.length === 0) {
-          prepared[platformId] = {
-            type: "error",
-            error: "No media files found",
-          };
-          continue;
-        }
-        if (!conn.platform_user_id) {
-          prepared[platformId] = {
-            type: "error",
-            error: "Instagram account ID missing. Reconnect.",
-          };
-          continue;
-        }
-
-        const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
-
-        // Resolve stored paths/URLs to signed URLs
-        const items: { url: string; isVideo: boolean }[] = [];
-        for (let i = 0; i < (post.media_urls as string[]).length; i++) {
-          const stored = (post.media_urls as string[])[i];
-          const isVideo =
-            (post.media_types as string[] | null)?.[i]?.startsWith(
-              "video/"
-            ) ?? false;
-          const signedUrl = await resolveToSignedUrl(stored);
-          if (!signedUrl) {
-            prepared[platformId] = {
-              type: "error",
-              error: `Failed to create signed URL for item ${i + 1}`,
-            };
-            break;
-          }
-          items.push({ url: signedUrl, isVideo });
-        }
-        if (prepared[platformId]?.type === "error") continue;
-
-        const igPostType =
-          (post.ig_post_type as "post" | "reel" | "story" | undefined) ??
-          "reel";
-
-        let prepResult: { containerId?: string; error?: string };
-        if (items.length === 1) {
-          prepResult = await prepareInstagramSingle(
-            accessToken,
-            conn.platform_user_id,
-            caption,
-            items[0].url,
-            items[0].isVideo,
-            igPostType
-          );
-        } else {
-          prepResult = await prepareInstagramCarousel(
-            accessToken,
-            conn.platform_user_id,
-            caption,
-            items
-          );
-        }
-
-        if (prepResult.error || !prepResult.containerId) {
-          prepared[platformId] = {
-            type: "error",
-            error: prepResult.error ?? "Unknown preparation error",
-          };
-        } else {
-          prepared[platformId] = {
-            type: "ig",
-            containerId: prepResult.containerId,
-          };
-          log.push(
-            `"${post.title}" Instagram: prepared (container ${prepResult.containerId})`
-          );
-        }
-      }
-    }
-
-    // ═══════════════════════════════════════════════════════════════
-    // SLEEP until exact scheduled time
-    // ═══════════════════════════════════════════════════════════════
-
-    const prepDone = Date.now();
-    const waitMs = scheduledTime - prepDone;
-    if (waitMs > 0) {
-      log.push(
-        `"${post.title}": prep done, sleeping ${Math.round(waitMs / 1000)}s until ${new Date(scheduledTime).toISOString()}`
-      );
-    }
-    await sleepUntil(scheduledTime);
-
-    // ═══════════════════════════════════════════════════════════════
-    // PHASE 2: PUBLISH — lightweight calls at exact scheduled time
-    // ═══════════════════════════════════════════════════════════════
-
-    const results: Record<string, { success: boolean; error?: string }> = {};
-    const publishTime = new Date().toISOString();
-
-    for (const platformId of post.platforms as string[]) {
-      const prep = prepared[platformId];
-      if (!prep) {
-        results[platformId] = { success: false, error: "Not prepared" };
-        continue;
-      }
-      if (prep.type === "error") {
-        results[platformId] = { success: false, error: prep.error };
-        continue;
-      }
-
-      // Get fresh access token (may have been refreshed in phase 1)
-      const conn = connectedPlatforms?.find(
-        (c: { platform: string }) => c.platform === platformId
-      );
-
-      // ── Publish YouTube ──
-      if (prep.type === "yt" && conn) {
-        try {
           const form = new FormData();
           form.append(
             "metadata",
-            new Blob([JSON.stringify(prep.metadata)], {
+            new Blob([JSON.stringify(metadata)], {
               type: "application/json",
             })
           );
-          form.append("video", prep.videoBlob);
+          form.append("video", videoBlob);
 
           const ytRes = await fetch(
             "https://www.googleapis.com/upload/youtube/v3/videos?part=snippet,status&uploadType=multipart",
             {
               method: "POST",
-              headers: { Authorization: `Bearer ${conn.access_token}` },
+              headers: { Authorization: `Bearer ${accessToken}` },
               body: form,
             }
           );
@@ -624,23 +693,30 @@ export default async function CronPage({
             results[platformId] = {
               success: false,
               error:
-                errData?.error?.message ?? `YouTube error ${ytRes.status}`,
+                errData?.error?.message ??
+                `YouTube error ${ytRes.status}`,
             };
           } else {
             const ytData = await ytRes.json();
-            // Upload thumbnail
-            if (prep.thumbBlob && ytData.id) {
-              await fetch(
-                `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${ytData.id}&uploadType=media`,
-                {
-                  method: "POST",
-                  headers: {
-                    Authorization: `Bearer ${conn.access_token}`,
-                    "Content-Type": "image/jpeg",
-                  },
-                  body: prep.thumbBlob,
+            if (post.thumbnail_url && ytData.id) {
+              const thumbUrl = await resolve(post.thumbnail_url);
+              if (thumbUrl) {
+                const thumbRes = await fetch(thumbUrl);
+                if (thumbRes.ok) {
+                  const thumbBlob = await thumbRes.blob();
+                  await fetch(
+                    `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${ytData.id}&uploadType=media`,
+                    {
+                      method: "POST",
+                      headers: {
+                        Authorization: `Bearer ${accessToken}`,
+                        "Content-Type": "image/jpeg",
+                      },
+                      body: thumbBlob,
+                    }
+                  );
                 }
-              );
+              }
             }
             results[platformId] = { success: true };
           }
@@ -650,15 +726,6 @@ export default async function CronPage({
             error: err instanceof Error ? err.message : String(err),
           };
         }
-      }
-
-      // ── Publish Instagram ──
-      if (prep.type === "ig" && conn) {
-        results[platformId] = await publishInstagramContainer(
-          conn.access_token,
-          conn.platform_user_id!,
-          prep.containerId
-        );
       }
     }
 
@@ -670,17 +737,17 @@ export default async function CronPage({
         results,
       })
       .eq("id", post.id);
-
     log.push(
-      `"${post.title}": published at ${publishTime} → ${JSON.stringify(results)}`
+      `"${post.title}": published at ${new Date().toISOString()} → ${JSON.stringify(results)}`
     );
-    processed++;
   }
 
+  log.push(`${new Date().toISOString()} — Done`);
   return (
     <div>
       <p>
-        OK: {processed} processed, {posts.length - processed} skipped
+        OK — pending:{pendingPosts?.length ?? 0} preparing:
+        {preparingPosts?.length ?? 0} prepared:{preparedPosts?.length ?? 0}
       </p>
       <pre style={{ fontSize: "12px", whiteSpace: "pre-wrap" }}>
         {log.join("\n")}

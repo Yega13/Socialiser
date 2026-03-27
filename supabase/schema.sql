@@ -48,6 +48,16 @@ create policy "Auth update" on storage.objects for update using (
   bucket_id = 'avatars' and auth.uid()::text = (storage.foldername(name))[1]);
 
 -- Scheduled posts
+-- State machine: pending → preparing → prepared → completed/failed
+-- Migration required (run in Supabase SQL Editor if upgrading):
+--   UPDATE public.scheduled_posts SET status = 'pending' WHERE status = 'processing';
+--   ALTER TABLE public.scheduled_posts DROP CONSTRAINT IF EXISTS scheduled_posts_status_check;
+--   ALTER TABLE public.scheduled_posts ADD CONSTRAINT scheduled_posts_status_check
+--     CHECK (status IN ('pending', 'preparing', 'prepared', 'publishing', 'completed', 'failed'));
+--   ALTER TABLE public.scheduled_posts ADD COLUMN IF NOT EXISTS prepared_containers JSONB;
+--   DROP INDEX IF EXISTS idx_scheduled_pending;
+--   CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, status)
+--     WHERE status IN ('pending', 'preparing', 'prepared');
 create table public.scheduled_posts (
   id uuid default gen_random_uuid() primary key,
   user_id uuid references auth.users(id) on delete cascade not null,
@@ -55,7 +65,8 @@ create table public.scheduled_posts (
   description text,
   platforms text[] not null,
   scheduled_at timestamptz not null,
-  status text default 'pending' check (status in ('pending', 'processing', 'completed', 'failed')),
+  status text default 'pending' check (status in ('pending', 'preparing', 'prepared', 'publishing', 'completed', 'failed')),
+  prepared_containers jsonb,
   results jsonb,
   media_urls text[],
   media_types text[],
@@ -70,7 +81,8 @@ create table public.scheduled_posts (
 );
 alter table public.scheduled_posts enable row level security;
 create policy "Owner all" on public.scheduled_posts for all using (auth.uid() = user_id);
-create index idx_scheduled_pending on public.scheduled_posts (scheduled_at) where status = 'pending';
+create index idx_scheduled_active on public.scheduled_posts (scheduled_at, status)
+  where status in ('pending', 'preparing', 'prepared');
 
 -- Storage policies for media bucket (Instagram uploads)
 create policy "Public read media" on storage.objects for select using (bucket_id = 'media');

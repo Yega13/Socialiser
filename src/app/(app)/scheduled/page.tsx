@@ -345,14 +345,14 @@ export default function ScheduledPage() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
-        // Only reset posts stuck in "processing" for >15 minutes
-        // (the cron may be actively working on recent ones)
-        const stuckCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+        // Reset posts stuck in transient states for >30 minutes
+        // (cron should have moved them along; if not, they're stuck)
+        const stuckCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
         const { data: stuckPosts } = await supabase
           .from("scheduled_posts")
-          .select("id, scheduled_at")
+          .select("id, scheduled_at, status")
           .eq("user_id", user.id)
-          .eq("status", "processing")
+          .in("status", ["processing", "preparing", "publishing"])
           .lt("scheduled_at", stuckCutoff);
 
         if (stuckPosts && stuckPosts.length > 0) {
@@ -416,7 +416,10 @@ export default function ScheduledPage() {
   }
 
   const pending = posts.filter((p) => p.status === "pending");
-  const processingPosts = posts.filter((p) => p.status === "processing");
+  const inProgress = posts.filter((p) =>
+    ["processing", "preparing", "publishing"].includes(p.status)
+  );
+  const prepared = posts.filter((p) => p.status === "prepared");
   const completed = posts.filter((p) => p.status === "completed");
   const failed = posts.filter((p) => p.status === "failed");
   const hasOverdue = pending.some(
@@ -475,14 +478,28 @@ export default function ScheduledPage() {
         </div>
       ) : (
         <div className="space-y-6">
-          {/* Processing */}
-          {processingPosts.length > 0 && (
+          {/* In-progress (processing / preparing / publishing) */}
+          {inProgress.length > 0 && (
             <div>
               <div className="font-bold text-sm text-[#00D4FF] mb-3">
-                Processing ({processingPosts.length})
+                In Progress ({inProgress.length})
               </div>
               <div className="space-y-3">
-                {processingPosts.map((post) => (
+                {inProgress.map((post) => (
+                  <PostCard key={post.id} post={post} onDelete={() => deletePost(post.id)} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Prepared — containers ready, waiting for publish time */}
+          {prepared.length > 0 && (
+            <div>
+              <div className="font-bold text-sm text-[#C8FF00] mb-3" style={{ color: "#7C6A00" }}>
+                Ready to Post ({prepared.length})
+              </div>
+              <div className="space-y-3">
+                {prepared.map((post) => (
                   <PostCard key={post.id} post={post} onDelete={() => deletePost(post.id)} />
                 ))}
               </div>
@@ -571,7 +588,9 @@ function PostCard({
           "border-[#FF4F4F] shadow-[4px_4px_0px_0px_#FF4F4F]",
         post.status === "pending" &&
           "border-[#7C3AED] shadow-[4px_4px_0px_0px_#7C3AED]",
-        post.status === "processing" &&
+        post.status === "prepared" &&
+          "border-[#C8FF00] shadow-[4px_4px_0px_0px_#8aaf00]",
+        ["processing", "preparing", "publishing"].includes(post.status) &&
           "border-[#00D4FF] shadow-[4px_4px_0px_0px_#00D4FF]"
       )}
     >
@@ -632,13 +651,20 @@ function PostCard({
             className={cn(
               "text-[10px] font-bold px-2 py-0.5",
               post.status === "pending" && "bg-[#7C3AED] text-white",
-              post.status === "processing" && "bg-[#00D4FF] text-[#0A0A0A]",
+              ["processing", "preparing", "publishing"].includes(post.status) && "bg-[#00D4FF] text-[#0A0A0A]",
+              post.status === "prepared" && "bg-[#C8FF00] text-[#0A0A0A]",
               post.status === "completed" && "bg-green-600 text-white",
               post.status === "failed" && "bg-[#FF4F4F] text-white"
             )}
           >
             {post.status === "pending" && isPast
               ? "OVERDUE"
+              : post.status === "preparing"
+              ? "PREPARING"
+              : post.status === "prepared"
+              ? "READY"
+              : post.status === "publishing"
+              ? "PUBLISHING"
               : post.status.toUpperCase()}
           </span>
           {onRetry && (
