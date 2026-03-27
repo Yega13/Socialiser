@@ -471,6 +471,10 @@ export default function ComposePage() {
 
   async function handleSchedule() {
     if (!title.trim() || selected.length === 0 || !scheduleDate) return;
+    if (new Date(scheduleDate).getTime() - Date.now() < 5 * 60 * 1000) {
+      setResults({ schedule: { success: false, error: "Please schedule at least 5 minutes ahead." } });
+      return;
+    }
 
     setModerationError(null);
     const modResult = moderatePost(title, description);

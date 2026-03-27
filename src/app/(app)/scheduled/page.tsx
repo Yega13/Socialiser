@@ -394,16 +394,20 @@ export default function ScheduledPage() {
   async function retryPost(id: string) {
     const { success } = await retryScheduledPost(id);
     if (!success) return;
-    // Reload then process the now-pending post
     await loadPosts();
-    setProcessing(true);
-    try {
-      await processOverduePosts();
-    } catch {
-      // ignore
-    }
+  }
+
+  async function reschedulePost(id: string, newDate: string) {
+    const supabase = createClient();
+    await supabase
+      .from("scheduled_posts")
+      .update({
+        scheduled_at: new Date(newDate).toISOString(),
+        status: "pending",
+        prepared_containers: null,
+      })
+      .eq("id", id);
     await loadPosts();
-    setProcessing(false);
   }
 
   const pending = posts.filter((p) => p.status === "pending");
@@ -509,6 +513,7 @@ export default function ScheduledPage() {
                     key={post.id}
                     post={post}
                     onDelete={() => deletePost(post.id)}
+                    onReschedule={(newDate) => reschedulePost(post.id, newDate)}
                   />
                 ))}
               </div>
@@ -546,6 +551,7 @@ export default function ScheduledPage() {
                     post={post}
                     onDelete={() => deletePost(post.id)}
                     onRetry={() => retryPost(post.id)}
+                    onReschedule={(newDate) => reschedulePost(post.id, newDate)}
                   />
                 ))}
               </div>
@@ -561,11 +567,15 @@ function PostCard({
   post,
   onDelete,
   onRetry,
+  onReschedule,
 }: {
   post: ScheduledPost;
   onDelete?: () => void;
   onRetry?: () => void;
+  onReschedule?: (newDate: string) => Promise<void>;
 }) {
+  const [showReschedule, setShowReschedule] = useState(false);
+  const [rescheduleDate, setRescheduleDate] = useState("");
   const scheduledDate = new Date(post.scheduled_at);
   const isPast = scheduledDate <= new Date();
 
@@ -649,7 +659,7 @@ function PostCard({
             )}
           >
             {post.status === "pending" && isPast
-              ? "OVERDUE"
+              ? "POST NOW"
               : post.status === "preparing"
               ? "PREPARING"
               : post.status === "prepared"
@@ -670,6 +680,20 @@ function PostCard({
               </svg>
             </button>
           )}
+          {onReschedule && !showReschedule && (
+            <button
+              onClick={() => setShowReschedule(true)}
+              className="p-1.5 text-[#5C5C5A] hover:bg-[#0A0A0A]/5 transition-colors"
+              title="Reschedule"
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="square">
+                <rect x="3" y="4" width="18" height="18" rx="0" />
+                <line x1="16" y1="2" x2="16" y2="6" />
+                <line x1="8" y1="2" x2="8" y2="6" />
+                <line x1="3" y1="10" x2="21" y2="10" />
+              </svg>
+            </button>
+          )}
           {onDelete && (
             <button
               onClick={onDelete}
@@ -687,6 +711,42 @@ function PostCard({
           )}
         </div>
       </div>
+      {showReschedule && (
+        <div className="mt-3 flex gap-1.5 items-center">
+          <input
+            type="datetime-local"
+            value={rescheduleDate}
+            min={new Date(Date.now() + 5 * 60 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+            onChange={(e) => setRescheduleDate(e.target.value)}
+            className="flex-1 min-w-0 border border-[#0A0A0A] p-2 text-xs bg-[#F9F9F7] outline-none focus:shadow-[2px_2px_0px_0px_#C8FF00]"
+          />
+          <button
+            onClick={async () => {
+              if (!rescheduleDate) return;
+              await onReschedule(rescheduleDate);
+              setShowReschedule(false);
+              setRescheduleDate("");
+            }}
+            disabled={!rescheduleDate}
+            className="p-2 bg-[#C8FF00] border border-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A] disabled:opacity-40 hover:enabled:translate-x-[1px] hover:enabled:translate-y-[1px] hover:enabled:shadow-none transition-all"
+            title="Confirm"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="square">
+              <polyline points="20 6 9 17 4 12" />
+            </svg>
+          </button>
+          <button
+            onClick={() => { setShowReschedule(false); setRescheduleDate(""); }}
+            className="p-2 border border-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px] hover:shadow-none transition-all"
+            title="Cancel"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="square">
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
+        </div>
+      )}
     </div>
   );
 }
