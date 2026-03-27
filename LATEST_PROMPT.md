@@ -4,6 +4,13 @@ Read this ENTIRE file before doing anything. It contains full context from the p
 
 ---
 
+## RULES (read before touching any code)
+
+**Rule #1 — NEVER overwrite files. Only edit.**
+Use Edit to make targeted changes: delete bad code, insert correct code. Never use Write on an existing file. If a file needs a complete architectural change, make it section by section using Edit, not a full replacement. This preserves git history and prevents accidental loss of working code.
+
+---
+
 ## What Is Socialiser?
 
 A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwind CSS v4, Supabase, deployed on Cloudflare Workers. Neo-brutalist design (lime #C8FF00, hard shadows, no border-radius, Geist font). The goal is to beat competitors like Metricool, Publer, Buffer by being simpler, faster, and more reliable.

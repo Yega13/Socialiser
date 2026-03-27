@@ -1002,13 +1002,26 @@ export default function ComposePage() {
                 <span className="font-bold text-sm text-[#0A0A0A]">Schedule for later</span>
               </label>
               {scheduleEnabled && (
-                <input
-                  type="datetime-local"
-                  value={scheduleDate}
-                  onChange={(e) => setScheduleDate(e.target.value)}
-                  min={new Date(Date.now() + 60000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
-                  className="mt-2 w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
-                />
+                <div className="mt-2 space-y-1.5">
+                  <input
+                    type="datetime-local"
+                    value={scheduleDate}
+                    onChange={(e) => setScheduleDate(e.target.value)}
+                    min={new Date(Date.now() + 5 * 60 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
+                    className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
+                  />
+                  {mediaItems.some((m) => m.file.type.startsWith("video/")) &&
+                   scheduleDate &&
+                   (new Date(scheduleDate).getTime() - Date.now()) / 60000 < 10 ? (
+                    <p className="text-xs font-semibold text-amber-600">
+                      ⚠ Video posts need ~10 min — may be slightly late
+                    </p>
+                  ) : (
+                    <p className="text-xs text-[#5C5C5A]">
+                      Schedule at least 5 min ahead
+                    </p>
+                  )}
+                </div>
               )}
             </div>
 
