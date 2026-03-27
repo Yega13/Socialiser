@@ -339,14 +339,13 @@ export default function ScheduledPage() {
     return processedCount;
   }, [resolveToSignedUrl]);
 
-  // On mount: reset truly stuck posts, process overdue, then load
+  // On mount: reset stuck posts, then load
   useEffect(() => {
     async function init() {
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (user) {
         // Reset posts stuck in transient states for >30 minutes
-        // (cron should have moved them along; if not, they're stuck)
         const stuckCutoff = new Date(Date.now() - 30 * 60 * 1000).toISOString();
         const { data: stuckPosts } = await supabase
           .from("scheduled_posts")
@@ -362,18 +361,10 @@ export default function ScheduledPage() {
             .in("id", stuckPosts.map((p) => p.id));
         }
       }
-
-      setProcessing(true);
-      try {
-        await processOverduePosts();
-      } catch {
-        // Processing failed — still load posts
-      }
-      setProcessing(false);
       await loadPosts();
     }
     init();
-  }, [loadPosts, processOverduePosts]);
+  }, [loadPosts]);
 
   async function handleProcessNow() {
     setProcessing(true);
