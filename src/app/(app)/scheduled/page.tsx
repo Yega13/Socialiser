@@ -705,12 +705,18 @@ function PostCard({
           >
             {post.status === "pending" && isPast
               ? "POST NOW"
+              : post.status === "pending"
+              ? "SCHEDULED"
               : post.status === "preparing"
-              ? "PREPARING"
+              ? "PROCESSING"
               : post.status === "prepared"
               ? "READY"
               : post.status === "publishing"
-              ? "PUBLISHING"
+              ? "POSTING..."
+              : post.status === "completed"
+              ? "POSTED"
+              : post.status === "failed"
+              ? "FAILED"
               : post.status.toUpperCase()}
           </span>
           {onRetry && (
