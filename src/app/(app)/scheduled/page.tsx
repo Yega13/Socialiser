@@ -698,7 +698,7 @@ function PostCard({
               "text-[10px] font-bold px-2 py-0.5",
               post.status === "pending" && "bg-[#7C3AED] text-white",
               ["processing", "preparing", "publishing"].includes(post.status) && "bg-[#00D4FF] text-[#0A0A0A]",
-              post.status === "prepared" && "bg-[#C8FF00] text-[#0A0A0A]",
+              post.status === "prepared" && "bg-emerald-500 text-white",
               post.status === "completed" && "bg-green-600 text-white",
               post.status === "failed" && "bg-[#FF4F4F] text-white"
             )}
