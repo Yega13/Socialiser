@@ -535,7 +535,7 @@ export default function ScheduledPage() {
           {/* Prepared — containers ready, waiting for publish time */}
           {prepared.length > 0 && (
             <div>
-              <div className="font-bold text-sm text-orange-500 mb-3">
+              <div className="font-bold text-sm text-teal-500 mb-3">
                 Ready to Post ({prepared.length})
               </div>
               <div className="space-y-3">
@@ -635,7 +635,7 @@ function PostCard({
         post.status === "pending" &&
           "border-[#7C3AED] shadow-[4px_4px_0px_0px_#7C3AED]",
         post.status === "prepared" &&
-          "border-orange-500 shadow-[4px_4px_0px_0px_#f97316]",
+          "border-teal-500 shadow-[4px_4px_0px_0px_#14b8a6]",
         ["processing", "preparing", "publishing"].includes(post.status) &&
           "border-[#00D4FF] shadow-[4px_4px_0px_0px_#00D4FF]"
       )}
@@ -698,7 +698,7 @@ function PostCard({
               "text-[10px] font-bold px-2 py-0.5",
               post.status === "pending" && "bg-[#7C3AED] text-white",
               ["processing", "preparing", "publishing"].includes(post.status) && "bg-[#00D4FF] text-[#0A0A0A]",
-              post.status === "prepared" && "bg-orange-500 text-white",
+              post.status === "prepared" && "bg-teal-500 text-white",
               post.status === "completed" && "bg-green-600 text-white",
               post.status === "failed" && "bg-[#FF4F4F] text-white"
             )}
