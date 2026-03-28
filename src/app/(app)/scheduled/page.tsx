@@ -5,9 +5,10 @@ import { createClient } from "@/lib/supabase/client";
 import {
   refreshYouTubeToken,
   refreshInstagramToken,
+  refreshBlueskySession,
   postToInstagramServer,
   postCarouselToInstagram,
-  retryScheduledPost,
+  postToBlueskyServer,
 } from "@/app/(app)/compose/actions";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +41,7 @@ export default function ScheduledPage() {
   const [loading, setLoading] = useState(true);
   const [processing, setProcessing] = useState(false);
   const [processingStatus, setProcessingStatus] = useState("");
+  const [processingError, setProcessingError] = useState<string | null>(null);
 
   const loadPosts = useCallback(async () => {
     const supabase = createClient();
@@ -166,6 +168,28 @@ export default function ScheduledPage() {
               results[platformId] = {
                 success: false,
                 error: "Token refresh failed",
+              };
+              continue;
+            }
+          } else if (platformId === "bluesky" && conn.refresh_token) {
+            setProcessingStatus("Refreshing Bluesky session...");
+            const refreshed = await refreshBlueskySession(conn.refresh_token);
+            if (refreshed) {
+              accessToken = refreshed.accessJwt;
+              await supabase
+                .from("connected_platforms")
+                .update({
+                  access_token: refreshed.accessJwt,
+                  refresh_token: refreshed.refreshJwt,
+                  token_expires_at: new Date(
+                    Date.now() + 2 * 3600 * 1000
+                  ).toISOString(),
+                })
+                .eq("id", conn.id);
+            } else {
+              results[platformId] = {
+                success: false,
+                error: "Bluesky session expired. Reconnect.",
               };
               continue;
             }
@@ -321,6 +345,47 @@ export default function ScheduledPage() {
             );
           }
         }
+
+        // ── Bluesky ──
+        if (platformId === "bluesky") {
+          setProcessingStatus("Posting to Bluesky...");
+          const postText = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+
+          let bskyImages: { bytes: number[]; mimeType: string; name: string }[] | undefined;
+          let bskyVideo: { bytes: number[]; mimeType: string; name: string } | undefined;
+
+          if (post.media_urls && post.media_urls.length > 0) {
+            for (let i = 0; i < (post.media_urls as string[]).length; i++) {
+              const stored = (post.media_urls as string[])[i];
+              const mimeType = (post.media_types as string[] | null)?.[i] ?? "image/jpeg";
+              const isVideo = mimeType.startsWith("video/");
+              const signedUrl = await resolveToSignedUrl(supabase, stored);
+              if (!signedUrl) continue;
+
+              const fileRes = await fetch(signedUrl);
+              if (!fileRes.ok) continue;
+              const bytes = Array.from(new Uint8Array(await fileRes.arrayBuffer()));
+
+              if (isVideo && !bskyVideo) {
+                bskyVideo = { bytes, mimeType, name: stored.split("/").pop() || "video.mp4" };
+                break; // Bluesky supports 1 video per post
+              } else if (!isVideo) {
+                if (!bskyImages) bskyImages = [];
+                if (bskyImages.length < 4) {
+                  bskyImages.push({ bytes, mimeType, name: stored.split("/").pop() || "image.jpg" });
+                }
+              }
+            }
+          }
+
+          results[platformId] = await postToBlueskyServer(
+            accessToken,
+            conn.platform_user_id!,
+            postText,
+            bskyImages,
+            bskyVideo
+          );
+        }
       }
 
       const allFailed = Object.values(results).every((r) => !r.success);
@@ -413,10 +478,11 @@ export default function ScheduledPage() {
 
   async function handleProcessNow() {
     setProcessing(true);
+    setProcessingError(null);
     try {
       await processOverduePosts();
-    } catch {
-      // ignore
+    } catch (err) {
+      setProcessingError(err instanceof Error ? err.message : "Failed to process posts. Please try again.");
     }
     await loadPosts();
     setProcessing(false);
@@ -437,8 +503,12 @@ export default function ScheduledPage() {
   }
 
   async function retryPost(id: string) {
-    const { success } = await retryScheduledPost(id);
-    if (!success) return;
+    const supabase = createClient();
+    const { error } = await supabase
+      .from("scheduled_posts")
+      .update({ status: "pending", results: null })
+      .eq("id", id);
+    if (error) return;
     await loadPosts();
   }
 
@@ -450,6 +520,7 @@ export default function ScheduledPage() {
         scheduled_at: new Date(newDate).toISOString(),
         status: "pending",
         prepared_containers: null,
+        results: null,
       })
       .eq("id", id);
     await loadPosts();
@@ -498,6 +569,12 @@ export default function ScheduledPage() {
           </div>
         </div>
       </div>
+
+      {processingError && (
+        <div className="border border-[#FF4F4F] bg-red-50 p-3 shadow-[4px_4px_0px_0px_#FF4F4F]">
+          <p className="text-sm font-bold text-[#FF4F4F]">{processingError}</p>
+        </div>
+      )}
 
       {loading || processing ? (
         <div className="flex items-center gap-2 text-sm text-[#5C5C5A]">

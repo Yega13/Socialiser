@@ -1,6 +1,5 @@
 "use server";
 
-import { createClient as createServerClient } from "@/lib/supabase/server";
 
 export async function refreshYouTubeToken(
   refreshToken: string
@@ -242,22 +241,194 @@ export async function postCarouselToInstagram(
   }
 }
 
-// ── Retry a failed scheduled post ────────────────────────────────
+// ── Bluesky (AT Protocol) ────────────────────────────────────────
 
-export async function retryScheduledPost(
-  postId: string
-): Promise<{ success: boolean }> {
-  const supabase = await createServerClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { success: false };
+const BSKY_API = "https://bsky.social/xrpc";
 
-  const { error } = await supabase
-    .from("scheduled_posts")
-    .update({ status: "pending", results: null })
-    .eq("id", postId)
-    .eq("user_id", user.id);
+export async function refreshBlueskySession(
+  refreshJwt: string
+): Promise<{ accessJwt: string; refreshJwt: string } | null> {
+  const res = await fetch(`${BSKY_API}/com.atproto.server.refreshSession`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${refreshJwt}` },
+  });
+  if (!res.ok) return null;
+  const data = await res.json();
+  return data.accessJwt ? { accessJwt: data.accessJwt, refreshJwt: data.refreshJwt } : null;
+}
 
-  return { success: !error };
+async function bskyUploadBlob(
+  accessJwt: string,
+  fileBytes: ArrayBuffer,
+  mimeType: string
+): Promise<{ blob?: { $type: string; ref: { $link: string }; mimeType: string; size: number }; error?: string }> {
+  const res = await fetch(`${BSKY_API}/com.atproto.repo.uploadBlob`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessJwt}`,
+      "Content-Type": mimeType,
+    },
+    body: fileBytes,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    return { error: err?.message || `Upload failed (${res.status})` };
+  }
+  const data = await res.json();
+  return { blob: data.blob };
+}
+
+async function bskyUploadVideo(
+  accessJwt: string,
+  did: string,
+  fileBytes: ArrayBuffer,
+  fileName: string
+): Promise<{ blob?: { $type: string; ref: { $link: string }; mimeType: string; size: number }; error?: string }> {
+  // Step 1: Get service auth token for video upload
+  const authRes = await fetch(
+    `${BSKY_API}/com.atproto.server.getServiceAuth?aud=did:web:video.bsky.app&lxm=com.atproto.repo.uploadBlob`,
+    { headers: { Authorization: `Bearer ${accessJwt}` } }
+  );
+  if (!authRes.ok) {
+    return { error: "Failed to get video upload auth" };
+  }
+  const { token: serviceToken } = await authRes.json();
+
+  // Step 2: Upload to video service
+  const uploadRes = await fetch(
+    `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?did=${encodeURIComponent(did)}&name=${encodeURIComponent(fileName)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceToken}`,
+        "Content-Type": "video/mp4",
+      },
+      body: fileBytes,
+    }
+  );
+  if (!uploadRes.ok) {
+    const err = await uploadRes.json().catch(() => ({}));
+    return { error: err?.message || `Video upload failed (${uploadRes.status})` };
+  }
+  const uploadData = await uploadRes.json();
+
+  // Step 3: Poll for processing completion
+  const jobId = uploadData.jobId;
+  if (!jobId) return { blob: uploadData.blob };
+
+  for (let i = 0; i < 120; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const statusRes = await fetch(
+      `https://video.bsky.app/xrpc/app.bsky.video.getJobStatus?jobId=${encodeURIComponent(jobId)}`,
+      { headers: { Authorization: `Bearer ${accessJwt}` } }
+    );
+    if (!statusRes.ok) continue;
+    const statusData = await statusRes.json();
+    if (statusData.jobStatus?.state === "JOB_STATE_COMPLETED") {
+      return { blob: statusData.jobStatus.blob };
+    }
+    if (statusData.jobStatus?.state === "JOB_STATE_FAILED") {
+      return { error: statusData.jobStatus?.error || "Video processing failed" };
+    }
+  }
+  return { error: "Video processing timed out (4 min)" };
+}
+
+function detectFacets(text: string): { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] {
+  const encoder = new TextEncoder();
+  const facets: { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] = [];
+
+  // Detect URLs
+  const urlRegex = /https?:\/\/[^\s<>"{}|\\^`[\]]+/g;
+  let match;
+  while ((match = urlRegex.exec(text)) !== null) {
+    const before = encoder.encode(text.slice(0, match.index));
+    const url = encoder.encode(match[0]);
+    facets.push({
+      index: { byteStart: before.length, byteEnd: before.length + url.length },
+      features: [{ $type: "app.bsky.richtext.facet#link", uri: match[0] }],
+    });
+  }
+
+  // Detect hashtags
+  const tagRegex = /(?<=\s|^)#([a-zA-Z0-9_]+)/g;
+  while ((match = tagRegex.exec(text)) !== null) {
+    const before = encoder.encode(text.slice(0, match.index));
+    const tag = encoder.encode(match[0]);
+    facets.push({
+      index: { byteStart: before.length, byteEnd: before.length + tag.length },
+      features: [{ $type: "app.bsky.richtext.facet#tag", tag: match[1] }],
+    });
+  }
+
+  return facets;
+}
+
+export async function postToBlueskyServer(
+  accessJwt: string,
+  did: string,
+  text: string,
+  images?: { bytes: number[]; mimeType: string; name: string }[],
+  video?: { bytes: number[]; mimeType: string; name: string }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const facets = detectFacets(text);
+
+    const record: Record<string, unknown> = {
+      $type: "app.bsky.feed.post",
+      text,
+      createdAt: new Date().toISOString(),
+      ...(facets.length > 0 && { facets }),
+    };
+
+    // Embed images (up to 4)
+    if (images && images.length > 0) {
+      const uploadedImages: Record<string, unknown>[] = [];
+      for (const img of images.slice(0, 4)) {
+        const result = await bskyUploadBlob(accessJwt, new Uint8Array(img.bytes).buffer, img.mimeType);
+        if (result.error) return { success: false, error: `Image upload: ${result.error}` };
+        uploadedImages.push({
+          alt: "",
+          image: result.blob,
+        });
+      }
+      record.embed = {
+        $type: "app.bsky.embed.images",
+        images: uploadedImages,
+      };
+    }
+
+    // Embed video (1 max, overrides images)
+    if (video) {
+      const result = await bskyUploadVideo(accessJwt, did, new Uint8Array(video.bytes).buffer, video.name);
+      if (result.error) return { success: false, error: `Video upload: ${result.error}` };
+      record.embed = {
+        $type: "app.bsky.embed.video",
+        video: result.blob,
+        alt: "",
+      };
+    }
+
+    const res = await fetch(`${BSKY_API}/com.atproto.repo.createRecord`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessJwt}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        repo: did,
+        collection: "app.bsky.feed.post",
+        record,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      return { success: false, error: err?.message || `Post failed (${res.status})` };
+    }
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
 }

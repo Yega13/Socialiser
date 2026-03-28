@@ -19,6 +19,10 @@ export function PlatformCard({
   platformUsername,
 }: PlatformCardProps) {
   const [isLoading, setIsLoading] = useState(false);
+  const [showBlueskyForm, setShowBlueskyForm] = useState(false);
+  const [bskyHandle, setBskyHandle] = useState("");
+  const [bskyAppPassword, setBskyAppPassword] = useState("");
+  const [bskyError, setBskyError] = useState("");
   const router = useRouter();
 
   async function handleDisconnect() {
@@ -30,6 +34,72 @@ export function PlatformCard({
       .delete()
       .eq("platform", platform.id);
     router.refresh();
+    setIsLoading(false);
+  }
+
+  async function handleBlueskyConnect() {
+    if (!bskyHandle.trim() || !bskyAppPassword.trim()) {
+      setBskyError("Enter both handle and app password.");
+      return;
+    }
+    setIsLoading(true);
+    setBskyError("");
+
+    try {
+      // Authenticate with Bluesky
+      const sessionRes = await fetch("https://bsky.social/xrpc/com.atproto.server.createSession", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          identifier: bskyHandle.trim(),
+          password: bskyAppPassword.trim(),
+        }),
+      });
+
+      if (!sessionRes.ok) {
+        const err = await sessionRes.json().catch(() => ({}));
+        setBskyError(err?.message || "Invalid handle or app password.");
+        setIsLoading(false);
+        return;
+      }
+
+      const session = await sessionRes.json();
+
+      // Save to database
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { window.location.href = "/login"; return; }
+
+      const { error: dbError } = await supabase
+        .from("connected_platforms")
+        .upsert(
+          {
+            user_id: user.id,
+            platform: "bluesky",
+            platform_username: session.handle,
+            platform_user_id: session.did,
+            access_token: session.accessJwt,
+            refresh_token: session.refreshJwt,
+            token_expires_at: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+            is_active: true,
+          },
+          { onConflict: "user_id,platform" }
+        );
+
+      if (dbError) {
+        setBskyError(`Database error: ${dbError.message}`);
+        setIsLoading(false);
+        return;
+      }
+
+      setShowBlueskyForm(false);
+      setBskyHandle("");
+      setBskyAppPassword("");
+      router.refresh();
+    } catch (err) {
+      setBskyError(err instanceof Error ? err.message : "Connection failed.");
+    }
     setIsLoading(false);
   }
 
@@ -68,6 +138,9 @@ export function PlatformCard({
         state: user.id,
       });
       window.location.href = `https://api.instagram.com/oauth/authorize?${params}`;
+    } else if (platform.id === "bluesky") {
+      setShowBlueskyForm(true);
+      setBskyError("");
     } else {
       window.location.href = `/api/auth/${platform.id}`;
     }
@@ -104,21 +177,67 @@ export function PlatformCard({
         )}
       </div>
 
-      <Button
-        variant={connected ? "outline" : "primary"}
-        size="sm"
-        disabled={platform.comingSoon || isLoading}
-        onClick={connected ? handleDisconnect : handleConnect}
-        className="w-full"
-      >
-        {platform.comingSoon
-          ? "Coming Soon"
-          : isLoading
-          ? "..."
-          : connected
-          ? "Disconnect"
-          : "Connect"}
-      </Button>
+      {showBlueskyForm && !connected && (
+        <div className="space-y-2">
+          <input
+            type="text"
+            placeholder="Handle (e.g. alice.bsky.social)"
+            value={bskyHandle}
+            onChange={(e) => setBskyHandle(e.target.value)}
+            className="w-full border border-[#0A0A0A] p-2 text-xs bg-[#F9F9F7] outline-none focus:shadow-[2px_2px_0px_0px_#0085FF]"
+          />
+          <input
+            type="password"
+            placeholder="App Password"
+            value={bskyAppPassword}
+            onChange={(e) => setBskyAppPassword(e.target.value)}
+            className="w-full border border-[#0A0A0A] p-2 text-xs bg-[#F9F9F7] outline-none focus:shadow-[2px_2px_0px_0px_#0085FF]"
+          />
+          {bskyError && (
+            <p className="text-xs font-bold text-[#FF4F4F]">{bskyError}</p>
+          )}
+          <p className="text-[10px] text-[#5C5C5A]">
+            Go to Bluesky → Settings → App Passwords → Add App Password
+          </p>
+          <div className="flex gap-2">
+            <Button
+              variant="primary"
+              size="sm"
+              disabled={isLoading}
+              onClick={handleBlueskyConnect}
+              className="flex-1"
+            >
+              {isLoading ? "..." : "Connect"}
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => { setShowBlueskyForm(false); setBskyError(""); }}
+              className="flex-1"
+            >
+              Cancel
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {!showBlueskyForm && (
+        <Button
+          variant={connected ? "outline" : "primary"}
+          size="sm"
+          disabled={platform.comingSoon || isLoading}
+          onClick={connected ? handleDisconnect : handleConnect}
+          className="w-full"
+        >
+          {platform.comingSoon
+            ? "Coming Soon"
+            : isLoading
+            ? "..."
+            : connected
+            ? "Disconnect"
+            : "Connect"}
+        </Button>
+      )}
     </div>
   );
 }

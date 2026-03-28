@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken, postToInstagramServer, postCarouselToInstagram } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToBlueskyServer } from "./actions";
 import { moderatePost } from "@/lib/moderation";
 
 type ConnectedPlatform = {
@@ -342,124 +342,190 @@ export default function ComposePage() {
     const supabase = createClient();
     const postResults: Record<string, { success: boolean; error?: string }> = {};
 
-    for (const platformId of selected) {
-      const conn = connected.find((c) => c.platform === platformId);
-      if (!conn) {
-        postResults[platformId] = { success: false, error: "Not connected" };
-        continue;
-      }
-
-      let accessToken = conn.access_token;
-
-      // Refresh token if expired
-      if (conn.token_expires_at && new Date(conn.token_expires_at) <= new Date()) {
-        if (platformId === "youtube" && conn.refresh_token) {
-          setPostingStatus("Refreshing YouTube token...");
-          const newToken = await refreshYouTubeToken(conn.refresh_token);
-          if (newToken) {
-            accessToken = newToken;
-            await supabase.from("connected_platforms").update({
-              access_token: newToken,
-              token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
-            }).eq("id", conn.id);
-          }
-        } else if (platformId === "instagram") {
-          setPostingStatus("Refreshing Instagram token...");
-          const result = await refreshInstagramToken(accessToken);
-          if (result) {
-            accessToken = result.access_token;
-            await supabase.from("connected_platforms").update({
-              access_token: result.access_token,
-              token_expires_at: new Date(Date.now() + result.expires_in * 1000).toISOString(),
-            }).eq("id", conn.id);
-          }
+    try {
+      for (const platformId of selected) {
+        const conn = connected.find((c) => c.platform === platformId);
+        if (!conn) {
+          postResults[platformId] = { success: false, error: "Not connected" };
+          continue;
         }
-      }
 
-      if (platformId === "youtube") {
-        const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
-        if (!videoItem) {
-          postResults[platformId] = { success: false, error: "YouTube requires a video file" };
-        } else {
-          setPostingStatus("Uploading to YouTube...");
-          postResults[platformId] = await postToYouTube(accessToken, title, description, videoItem.file, thumbnailBlob);
-        }
-      }
+        let accessToken = conn.access_token;
 
-      if (platformId === "instagram") {
-        if (mediaItems.length === 0) {
-          postResults[platformId] = { success: false, error: "Instagram requires at least one image or video" };
-        } else if (!conn.platform_user_id) {
-          postResults[platformId] = { success: false, error: "Instagram account ID missing. Reconnect." };
-        } else {
-          // Upload all media files to Supabase
-          const uploadedItems: { url: string; isVideo: boolean }[] = [];
-          let uploadFailed = false;
-
-          for (let i = 0; i < mediaItems.length; i++) {
-            const item = mediaItems[i];
-            const isVideo = item.file.type.startsWith("video/");
-
-            setPostingStatus(`Uploading file ${i + 1}/${mediaItems.length}...`);
-
-            let fileToUpload: File | Blob = item.file;
-            let uploadName = item.file.name;
-
-            if (!isVideo) {
-              const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
-              fileToUpload = prepared.blob;
-              uploadName = prepared.name;
-            }
-
-            const fileName = `instagram/${Date.now()}-${i}-${uploadName}`;
-            const { error: uploadError } = await supabase.storage
-              .from("media")
-              .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
-
-            if (uploadError) {
-              postResults[platformId] = { success: false, error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
-              uploadFailed = true;
-              break;
-            }
-
-            const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
-            const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
-            uploadedItems.push({ url: mediaUrl, isVideo });
-          }
-
-          if (!uploadFailed) {
-            const caption = `${title}${description ? "\n\n" + description : ""}`;
-
-            if (uploadedItems.length === 1) {
-              // Single post
-              const typeLabel = effectiveIgPostType === "story"
-                ? "Publishing story..."
-                : effectiveIgPostType === "reel"
-                ? "Publishing reel..."
-                : uploadedItems[0].isVideo
-                ? "Publishing video post..."
-                : "Publishing to Instagram...";
-              setPostingStatus(typeLabel);
-              postResults[platformId] = await postToInstagramServer(
-                accessToken,
-                conn.platform_user_id,
-                caption,
-                uploadedItems[0].url,
-                uploadedItems[0].isVideo,
-                effectiveIgPostType === "reel" ? "reel" : effectiveIgPostType === "story" ? "story" : "post"
-              );
+        // Refresh token if expired
+        if (conn.token_expires_at && new Date(conn.token_expires_at) <= new Date()) {
+          if (platformId === "youtube" && conn.refresh_token) {
+            setPostingStatus("Refreshing YouTube token...");
+            const newToken = await refreshYouTubeToken(conn.refresh_token);
+            if (newToken) {
+              accessToken = newToken;
+              await supabase.from("connected_platforms").update({
+                access_token: newToken,
+                token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+              }).eq("id", conn.id);
             } else {
-              // Carousel post
-              setPostingStatus(`Publishing carousel (${uploadedItems.length} items)...`);
-              postResults[platformId] = await postCarouselToInstagram(
-                accessToken,
-                conn.platform_user_id,
-                caption,
-                uploadedItems
-              );
+              postResults[platformId] = { success: false, error: "YouTube token expired. Reconnect in Settings." };
+              continue;
+            }
+          } else if (platformId === "instagram") {
+            setPostingStatus("Refreshing Instagram token...");
+            const result = await refreshInstagramToken(accessToken);
+            if (result) {
+              accessToken = result.access_token;
+              await supabase.from("connected_platforms").update({
+                access_token: result.access_token,
+                token_expires_at: new Date(Date.now() + result.expires_in * 1000).toISOString(),
+              }).eq("id", conn.id);
+            } else {
+              postResults[platformId] = { success: false, error: "Instagram token expired. Reconnect in Settings." };
+              continue;
+            }
+          } else if (platformId === "bluesky" && conn.refresh_token) {
+            setPostingStatus("Refreshing Bluesky session...");
+            const result = await refreshBlueskySession(conn.refresh_token);
+            if (result) {
+              accessToken = result.accessJwt;
+              await supabase.from("connected_platforms").update({
+                access_token: result.accessJwt,
+                refresh_token: result.refreshJwt,
+                token_expires_at: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+              }).eq("id", conn.id);
+            } else {
+              postResults[platformId] = { success: false, error: "Bluesky session expired. Reconnect in Settings." };
+              continue;
             }
           }
+        }
+
+        if (platformId === "youtube") {
+          const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
+          if (!videoItem) {
+            postResults[platformId] = { success: false, error: "YouTube requires a video file" };
+          } else {
+            setPostingStatus("Uploading to YouTube...");
+            postResults[platformId] = await postToYouTube(accessToken, title, description, videoItem.file, thumbnailBlob);
+          }
+        }
+
+        if (platformId === "instagram") {
+          if (mediaItems.length === 0) {
+            postResults[platformId] = { success: false, error: "Instagram requires at least one image or video" };
+          } else if (!conn.platform_user_id) {
+            postResults[platformId] = { success: false, error: "Instagram account ID missing. Reconnect." };
+          } else {
+            // Upload all media files to Supabase
+            const uploadedItems: { url: string; isVideo: boolean }[] = [];
+            let uploadFailed = false;
+
+            for (let i = 0; i < mediaItems.length; i++) {
+              const item = mediaItems[i];
+              const isVideo = item.file.type.startsWith("video/");
+
+              setPostingStatus(`Uploading file ${i + 1}/${mediaItems.length}...`);
+
+              let fileToUpload: File | Blob = item.file;
+              let uploadName = item.file.name;
+
+              if (!isVideo) {
+                const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+                const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
+                fileToUpload = prepared.blob;
+                uploadName = prepared.name;
+              }
+
+              const fileName = `instagram/${Date.now()}-${i}-${uploadName}`;
+              const { error: uploadError } = await supabase.storage
+                .from("media")
+                .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
+
+              if (uploadError) {
+                postResults[platformId] = { success: false, error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
+                uploadFailed = true;
+                break;
+              }
+
+              const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
+              const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
+              uploadedItems.push({ url: mediaUrl, isVideo });
+            }
+
+            if (!uploadFailed) {
+              const caption = `${title}${description ? "\n\n" + description : ""}`;
+
+              if (uploadedItems.length === 1) {
+                // Single post
+                const typeLabel = effectiveIgPostType === "story"
+                  ? "Publishing story..."
+                  : effectiveIgPostType === "reel"
+                  ? "Publishing reel..."
+                  : uploadedItems[0].isVideo
+                  ? "Publishing video post..."
+                  : "Publishing to Instagram...";
+                setPostingStatus(typeLabel);
+                postResults[platformId] = await postToInstagramServer(
+                  accessToken,
+                  conn.platform_user_id,
+                  caption,
+                  uploadedItems[0].url,
+                  uploadedItems[0].isVideo,
+                  effectiveIgPostType === "reel" ? "reel" : effectiveIgPostType === "story" ? "story" : "post"
+                );
+              } else {
+                // Carousel post
+                setPostingStatus(`Publishing carousel (${uploadedItems.length} items)...`);
+                postResults[platformId] = await postCarouselToInstagram(
+                  accessToken,
+                  conn.platform_user_id,
+                  caption,
+                  uploadedItems
+                );
+              }
+            }
+          }
+        }
+
+        if (platformId === "bluesky") {
+          const postText = `${title}${description ? "\n\n" + description : ""}`;
+          setPostingStatus("Posting to Bluesky...");
+
+          // Prepare media for Bluesky
+          let bskyImages: { bytes: number[]; mimeType: string; name: string }[] | undefined;
+          let bskyVideo: { bytes: number[]; mimeType: string; name: string } | undefined;
+
+          if (mediaItems.length > 0) {
+            const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
+            if (videoItem) {
+              setPostingStatus("Preparing video for Bluesky...");
+              const bytes = Array.from(new Uint8Array(await videoItem.file.arrayBuffer()));
+              bskyVideo = { bytes, mimeType: videoItem.file.type, name: videoItem.file.name };
+            } else {
+              // Images (up to 4, max 1MB each)
+              const imageItems = mediaItems.filter((m) => m.file.type.startsWith("image/")).slice(0, 4);
+              if (imageItems.length > 0) {
+                setPostingStatus(`Preparing ${imageItems.length} image${imageItems.length > 1 ? "s" : ""} for Bluesky...`);
+                bskyImages = [];
+                for (const img of imageItems) {
+                  const bytes = Array.from(new Uint8Array(await img.file.arrayBuffer()));
+                  bskyImages.push({ bytes, mimeType: img.file.type, name: img.file.name });
+                }
+              }
+            }
+          }
+
+          postResults[platformId] = await postToBlueskyServer(
+            accessToken,
+            conn.platform_user_id!,
+            postText,
+            bskyImages,
+            bskyVideo
+          );
+        }
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Something went wrong";
+      for (const platformId of selected) {
+        if (!postResults[platformId]) {
+          postResults[platformId] = { success: false, error: message };
         }
       }
     }
@@ -471,7 +537,7 @@ export default function ComposePage() {
 
   async function handleSchedule() {
     if (!title.trim() || selected.length === 0 || !scheduleDate) return;
-    if (new Date(scheduleDate).getTime() - Date.now() < 3 * 60 * 1000) {
+    if (new Date(scheduleDate).getTime() - Date.now() < 4 * 60 * 1000) {
       setResults({ schedule: { success: false, error: "Please schedule at least 5 minutes ahead." } });
       return;
     }
@@ -486,84 +552,89 @@ export default function ComposePage() {
     setIsPosting(true);
     setPostingStatus("Preparing scheduled post...");
 
-    const supabase = createClient();
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { setIsPosting(false); return; }
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { setIsPosting(false); return; }
 
-    // Upload all media to storage (pre-process images)
-    const mediaUrls: string[] = [];
-    const mediaTypes: string[] = [];
-    const cropOffsets: { x: number; y: number }[] = [];
+      // Upload all media to storage (pre-process images)
+      const mediaUrls: string[] = [];
+      const mediaTypes: string[] = [];
+      const cropOffsets: { x: number; y: number }[] = [];
 
-    for (let i = 0; i < mediaItems.length; i++) {
-      const item = mediaItems[i];
-      const isVideo = item.file.type.startsWith("video/");
-      setPostingStatus(`Preparing file ${i + 1}/${mediaItems.length}...`);
+      for (let i = 0; i < mediaItems.length; i++) {
+        const item = mediaItems[i];
+        const isVideo = item.file.type.startsWith("video/");
+        setPostingStatus(`Preparing file ${i + 1}/${mediaItems.length}...`);
 
-      let fileToUpload: File | Blob = item.file;
-      let uploadName = item.file.name;
-      let contentType = item.file.type;
+        let fileToUpload: File | Blob = item.file;
+        let uploadName = item.file.name;
+        let contentType = item.file.type;
 
-      if (!isVideo && instagramSelected) {
-        const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-        const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
-        fileToUpload = prepared.blob;
-        uploadName = prepared.name;
-        contentType = "image/jpeg";
+        if (!isVideo && instagramSelected) {
+          const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+          const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
+          fileToUpload = prepared.blob;
+          uploadName = prepared.name;
+          contentType = "image/jpeg";
+        }
+
+        const fileName = `scheduled/${Date.now()}-${i}-${uploadName}`;
+        const { error } = await supabase.storage
+          .from("media")
+          .upload(fileName, fileToUpload, { upsert: true, contentType });
+
+        if (error) {
+          setResults({ schedule: { success: false, error: `Upload failed: ${error.message}` } });
+          setIsPosting(false);
+          setPostingStatus("");
+          return;
+        }
+
+        // Store the raw file path — signed URLs are created at processing time
+        mediaUrls.push(fileName);
+        mediaTypes.push(contentType);
+        cropOffsets.push(item.cropOffset);
       }
 
-      const fileName = `scheduled/${Date.now()}-${i}-${uploadName}`;
-      const { error } = await supabase.storage
-        .from("media")
-        .upload(fileName, fileToUpload, { upsert: true, contentType });
-
-      if (error) {
-        setResults({ schedule: { success: false, error: `Upload failed: ${error.message}` } });
-        setIsPosting(false);
-        setPostingStatus("");
-        return;
+      // Upload thumbnail if set
+      let thumbUrl: string | undefined;
+      if (thumbnailBlob) {
+        const thumbName = `scheduled/${Date.now()}-thumbnail.jpg`;
+        const { error } = await supabase.storage
+          .from("media")
+          .upload(thumbName, thumbnailBlob, { upsert: true, contentType: "image/jpeg" });
+        if (!error) {
+          thumbUrl = thumbName; // Store path, not URL
+        }
       }
 
-      // Store the raw file path — signed URLs are created at processing time
-      mediaUrls.push(fileName);
-      mediaTypes.push(contentType);
-      cropOffsets.push(item.cropOffset);
-    }
+      setPostingStatus("Saving schedule...");
+      const { error: insertErr } = await supabase.from("scheduled_posts").insert({
+        user_id: user.id,
+        title,
+        description: description || null,
+        platforms: selected,
+        scheduled_at: new Date(scheduleDate).toISOString(),
+        media_urls: mediaUrls.length > 0 ? mediaUrls : null,
+        media_types: mediaTypes.length > 0 ? mediaTypes : null,
+        aspect_mode: aspectMode,
+        pad_color: padColor,
+        image_quality: imageQuality,
+        crop_offsets: cropOffsets,
+        thumbnail_url: thumbUrl ?? null,
+        filter_settings: filters,
+        ig_post_type: effectiveIgPostType === "carousel" ? "post" : effectiveIgPostType,
+      });
 
-    // Upload thumbnail if set
-    let thumbUrl: string | undefined;
-    if (thumbnailBlob) {
-      const thumbName = `scheduled/${Date.now()}-thumbnail.jpg`;
-      const { error } = await supabase.storage
-        .from("media")
-        .upload(thumbName, thumbnailBlob, { upsert: true, contentType: "image/jpeg" });
-      if (!error) {
-        thumbUrl = thumbName; // Store path, not URL
+      if (insertErr) {
+        setResults({ schedule: { success: false, error: insertErr.message } });
+      } else {
+        setResults({ schedule: { success: true } });
       }
-    }
-
-    setPostingStatus("Saving schedule...");
-    const { error: insertErr } = await supabase.from("scheduled_posts").insert({
-      user_id: user.id,
-      title,
-      description: description || null,
-      platforms: selected,
-      scheduled_at: new Date(scheduleDate).toISOString(),
-      media_urls: mediaUrls.length > 0 ? mediaUrls : null,
-      media_types: mediaTypes.length > 0 ? mediaTypes : null,
-      aspect_mode: aspectMode,
-      pad_color: padColor,
-      image_quality: imageQuality,
-      crop_offsets: cropOffsets,
-      thumbnail_url: thumbUrl ?? null,
-      filter_settings: filters,
-      ig_post_type: effectiveIgPostType === "carousel" ? "post" : effectiveIgPostType,
-    });
-
-    if (insertErr) {
-      setResults({ schedule: { success: false, error: insertErr.message } });
-    } else {
-      setResults({ schedule: { success: true } });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Something went wrong";
+      setResults({ schedule: { success: false, error: message } });
     }
 
     setPostingStatus("");

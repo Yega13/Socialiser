@@ -228,6 +228,30 @@ export default async function CronPage({
       return null;
     }
 
+    if (platformId === "bluesky" && conn.refresh_token) {
+      const res = await fetch("https://bsky.social/xrpc/com.atproto.server.refreshSession", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${conn.refresh_token}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.accessJwt) {
+          await supabase
+            .from("connected_platforms")
+            .update({
+              access_token: data.accessJwt,
+              refresh_token: data.refreshJwt,
+              token_expires_at: new Date(
+                Date.now() + 2 * 3600 * 1000
+              ).toISOString(),
+            })
+            .eq("id", conn.id);
+          return data.accessJwt;
+        }
+      }
+      return null;
+    }
+
     return conn.access_token as string;
   }
 
@@ -385,12 +409,12 @@ export default async function CronPage({
         .eq("id", post.id);
       log.push(`"${post.title}": PREPARE FAILED — ${fatalError}`);
     } else if (!hasIg) {
-      // YouTube-only posts: skip straight to prepared (upload happens at publish time)
+      // YouTube/Bluesky posts: skip straight to prepared (no container prep needed)
       await supabase
         .from("scheduled_posts")
         .update({ status: "prepared" })
         .eq("id", post.id);
-      log.push(`"${post.title}": → prepared (YouTube only)`);
+      log.push(`"${post.title}": → prepared (no IG containers needed)`);
     } else {
       await supabase
         .from("scheduled_posts")
@@ -730,6 +754,125 @@ export default async function CronPage({
             success: false,
             error: err instanceof Error ? err.message : String(err),
           };
+        }
+      }
+
+      // ── Post to Bluesky ──
+      if (platformId === "bluesky") {
+        try {
+          const postText = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+          let bskyImages: { bytes: number[]; mimeType: string; name: string }[] | undefined;
+          let bskyVideo: { bytes: number[]; mimeType: string; name: string } | undefined;
+
+          if (post.media_urls && (post.media_urls as string[]).length > 0) {
+            for (let i = 0; i < (post.media_urls as string[]).length; i++) {
+              const stored = (post.media_urls as string[])[i];
+              const mimeType = (post.media_types as string[] | null)?.[i] ?? "image/jpeg";
+              const isVideo = mimeType.startsWith("video/");
+              const fileUrl = await resolve(stored);
+              if (!fileUrl) continue;
+
+              const fileRes = await fetch(fileUrl);
+              if (!fileRes.ok) continue;
+              const bytes = Array.from(new Uint8Array(await fileRes.arrayBuffer()));
+
+              if (isVideo && !bskyVideo) {
+                bskyVideo = { bytes, mimeType, name: stored.split("/").pop() || "video.mp4" };
+                break;
+              } else if (!isVideo) {
+                if (!bskyImages) bskyImages = [];
+                if (bskyImages.length < 4) {
+                  bskyImages.push({ bytes, mimeType, name: stored.split("/").pop() || "image.jpg" });
+                }
+              }
+            }
+          }
+
+          // Call Bluesky API directly (server actions not available in cron)
+          const BSKY_API = "https://bsky.social/xrpc";
+          const facets: { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] = [];
+          const encoder = new TextEncoder();
+          const urlRegex = /https?:\/\/[^\s<>"{}|\\^`[\]]+/g;
+          let match;
+          while ((match = urlRegex.exec(postText)) !== null) {
+            const before = encoder.encode(postText.slice(0, match.index));
+            const url = encoder.encode(match[0]);
+            facets.push({
+              index: { byteStart: before.length, byteEnd: before.length + url.length },
+              features: [{ $type: "app.bsky.richtext.facet#link", uri: match[0] }],
+            });
+          }
+
+          const record: Record<string, unknown> = {
+            $type: "app.bsky.feed.post",
+            text: postText,
+            createdAt: new Date().toISOString(),
+            ...(facets.length > 0 && { facets }),
+          };
+
+          // Upload images
+          if (bskyImages && bskyImages.length > 0 && !bskyVideo) {
+            const uploaded: Record<string, unknown>[] = [];
+            for (const img of bskyImages) {
+              const upRes = await fetch(`${BSKY_API}/com.atproto.repo.uploadBlob`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": img.mimeType },
+                body: new Uint8Array(img.bytes),
+              });
+              if (!upRes.ok) { results[platformId] = { success: false, error: "Bluesky image upload failed" }; break; }
+              const upData = await upRes.json();
+              uploaded.push({ alt: "", image: upData.blob });
+            }
+            if (results[platformId]) continue;
+            record.embed = { $type: "app.bsky.embed.images", images: uploaded };
+          }
+
+          // Upload video
+          if (bskyVideo) {
+            const authRes = await fetch(
+              `${BSKY_API}/com.atproto.server.getServiceAuth?aud=did:web:video.bsky.app&lxm=com.atproto.repo.uploadBlob`,
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            if (!authRes.ok) { results[platformId] = { success: false, error: "Bluesky video auth failed" }; continue; }
+            const { token: svcToken } = await authRes.json();
+
+            const upRes = await fetch(
+              `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?did=${encodeURIComponent(conn.platform_user_id)}&name=${encodeURIComponent(bskyVideo.name)}`,
+              { method: "POST", headers: { Authorization: `Bearer ${svcToken}`, "Content-Type": "video/mp4" }, body: new Uint8Array(bskyVideo.bytes) }
+            );
+            if (!upRes.ok) { results[platformId] = { success: false, error: "Bluesky video upload failed" }; continue; }
+            const upData = await upRes.json();
+
+            if (upData.jobId) {
+              let videoBlob = upData.blob;
+              for (let j = 0; j < 60; j++) {
+                await new Promise((r) => setTimeout(r, 2000));
+                const sRes = await fetch(`https://video.bsky.app/xrpc/app.bsky.video.getJobStatus?jobId=${encodeURIComponent(upData.jobId)}`, { headers: { Authorization: `Bearer ${accessToken}` } });
+                if (!sRes.ok) continue;
+                const sData = await sRes.json();
+                if (sData.jobStatus?.state === "JOB_STATE_COMPLETED") { videoBlob = sData.jobStatus.blob; break; }
+                if (sData.jobStatus?.state === "JOB_STATE_FAILED") { results[platformId] = { success: false, error: "Bluesky video processing failed" }; break; }
+              }
+              if (results[platformId]) continue;
+              record.embed = { $type: "app.bsky.embed.video", video: videoBlob, alt: "" };
+            } else {
+              record.embed = { $type: "app.bsky.embed.video", video: upData.blob, alt: "" };
+            }
+          }
+
+          const postRes = await fetch(`${BSKY_API}/com.atproto.repo.createRecord`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ repo: conn.platform_user_id, collection: "app.bsky.feed.post", record }),
+          });
+          if (!postRes.ok) {
+            const err = await postRes.json().catch(() => ({}));
+            results[platformId] = { success: false, error: err?.message || `Bluesky post failed (${postRes.status})` };
+          } else {
+            results[platformId] = { success: true };
+          }
+        } catch (err) {
+          results[platformId] = { success: false, error: err instanceof Error ? err.message : String(err) };
         }
       }
     }
