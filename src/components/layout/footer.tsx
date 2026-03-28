@@ -12,6 +12,9 @@ export function Footer() {
           &copy; {new Date().getFullYear()} {SITE_CONFIG.name}. All rights reserved.
         </p>
         <nav className="flex gap-4 text-xs text-[#5C5C5A]">
+          <Link href="/privacy" className="hover:text-[#0A0A0A] transition-colors">Privacy</Link>
+          <Link href="/tos" className="hover:text-[#0A0A0A] transition-colors">Terms</Link>
+          <Link href="/content-policy" className="hover:text-[#0A0A0A] transition-colors">Content Policy</Link>
           <Link href="/login" className="hover:text-[#0A0A0A] transition-colors">Login</Link>
           <Link href="/register" className="hover:text-[#0A0A0A] transition-colors">Sign up</Link>
         </nav>

@@ -1,4 +1,4 @@
-# Socialiser — Session Handoff (2026-03-25)
+# Socialiser — Session Handoff (2026-03-28)
 
 Read this ENTIRE file before doing anything. It contains full context from the previous session.
 
@@ -34,11 +34,12 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
   - Single image → Feed Post or Story
   - Single video → Video Post, Reel, or Story
   - Carousel (2+ files) → Carousel (auto, no choice needed)
-- **Scheduling**: Posts can be scheduled for later — BUT THIS HAS ISSUES (see below)
+- **Scheduling**: Working reliably with state machine cron — FIXED (see below)
 - **Theme**: Light by default, persists user preference via localStorage
 - **Preview**: Live preview panel showing how post looks on IG (with type badge) and YouTube
 - **Image processing**: Aspect ratio cropping, padding, quality slider, brightness/contrast/saturation filters
-- **12 routes build cleanly**
+- **Legal pages**: Privacy Policy (/privacy), Terms of Service (/tos), Content Policy (/content-policy) — all live
+- **16 routes build cleanly**
 
 ## Platforms in Constants (src/lib/constants.ts)
 - YouTube — LIVE, working
@@ -87,7 +88,101 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 
 ---
 
-## What Was Built This Session
+## What Was Built This Session (2026-03-28)
+
+### 1. Schedule Button Greyed-Out Fix (compose page)
+**Root cause:** `canPost` had no check for `scheduleEnabled=true` but empty `scheduleDate`, and no check for YouTube+images conflict.
+**Changes to `src/app/(app)/compose/page.tsx`:**
+- Added `hasVideo` derived variable
+- Added `(!scheduleEnabled || scheduleDate.length > 0)` to `canPost`
+- Added `postBlockReason` variable — shows red text below the button explaining WHY it's disabled:
+  - `"YouTube requires video — deselect YouTube or upload a video"` when YouTube is selected with only images
+  - `"Pick a date & time to schedule"` when schedule is enabled but no date selected
+- Rendered `postBlockReason` below the action button when not posting
+
+### 2. Schedule False-Positive "5 Minutes Ahead" Fix
+**Root cause:** `datetime-local` rounds to the minute. Picking "5 min ahead" then filling the form for 60s means `Date.now()` has advanced and the check fails.
+**Changes to `src/app/(app)/compose/page.tsx`:**
+- `min` attribute on datetime-local raised from `5 * 60 * 1000` to `6 * 60 * 1000` (browser enforces 6-min minimum in picker UI)
+- Validation cutoff in `handleSchedule` lowered from `5 * 60 * 1000` to `3 * 60 * 1000` (silent 3-min tolerance — user can take 3 min to fill form after picking a time)
+- Error message still says "at least 5 minutes ahead" which is accurate since the picker enforces 6 minutes
+
+### 3. Scheduled Page Status Label Polish
+**File:** `src/app/(app)/scheduled/page.tsx`
+All status badge labels made human-readable:
+- `pending` → `SCHEDULED` (or `POST NOW` if overdue)
+- `preparing` → `PROCESSING`
+- `prepared` → `READY`
+- `publishing` → `POSTING...`
+- `completed` → `POSTED`
+- `failed` → `FAILED`
+
+### 4. Scheduled Page "READY" State Color
+**File:** `src/app/(app)/scheduled/page.tsx`
+After several iterations (lime → emerald → orange → teal), settled on **teal** (`teal-500` / `#14b8a6`):
+- Card border: `border-teal-500 shadow-[4px_4px_0px_0px_#14b8a6]`
+- Badge: `bg-teal-500 text-white`
+- Section heading: `text-teal-500`
+Full color palette for statuses now:
+- SCHEDULED — violet (#7C3AED)
+- PROCESSING — sky (#00D4FF)
+- READY — teal (#14b8a6)
+- POSTED — green-600
+- FAILED — coral (#FF4F4F)
+
+### 5. Token Refresh Failed — Explanation
+When the YouTube cron step sees "Token refresh failed", it means the Google refresh token is expired/revoked. Fix: Settings → Disconnect YouTube → Reconnect YouTube. This is NOT a code bug, it's a Google OAuth lifecycle issue. Reconnecting gets a fresh refresh token.
+
+### 6. Legal Pages — Privacy Policy & Terms of Service
+Two new pages created in `src/app/(marketing)/`:
+
+**`privacy/page.tsx`** — 12 sections covering:
+- What we collect (account data, OAuth tokens, content, usage data)
+- How we use data (no selling, no advertising)
+- **Google API / YouTube data** — full Limited Use disclosure as required by Google OAuth verification. States: youtube.upload scope only, no secondary use, refresh token storage in Supabase, how to revoke.
+- Instagram & Meta API data
+- Third-party services (Supabase, Cloudflare, Google, Meta)
+- Security (HTTPS, bcrypt, RLS, no plain-text passwords)
+- Data retention policy
+- User rights (GDPR, CCPA — access, rectification, erasure, portability)
+- Cookies & localStorage (session only, no tracking)
+- Children's privacy (13+, 16+ EU)
+- Changes policy (7-day notice for significant changes)
+- Contact: support@socializer.app
+
+**`tos/page.tsx`** — 15 sections covering:
+- Acceptance of terms (13+/16+EU, legal capacity)
+- What Socializer is + no affiliation with platforms
+- Account registration (accurate info, security, one account)
+- Connected platforms (platform ToS compliance, API change disclaimer, token expiry, no affiliation)
+- Acceptable use (8 prohibited activities with ✕ markers)
+- Content ownership (user retains ownership, limited licence to us)
+- Intellectual property
+- Service availability & scheduling (best-effort, failure handling)
+- Termination (by user via Settings, by us for violations)
+- Disclaimers ("as is", "as available")
+- Limitation of liability (£50 GBP cap)
+- Indemnification
+- Governing law & disputes (informal resolution first)
+- Changes to terms (14-day notice for material changes)
+- Contact: support@socializer.app
+
+**Design:** Both pages use identical layout to `/content-policy`: `max-w-2xl mx-auto px-6 py-16 space-y-10`, `border-l-4` section items, `border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A]` highlight boxes. Privacy uses `#7C3AED` violet accents, ToS uses `#0A0A0A` black accents.
+
+**Footer updated** (`src/components/layout/footer.tsx`):
+Added Privacy, Terms, Content Policy links before Login/Sign up in the footer nav.
+
+### 7. Google OAuth Verification Path
+To get YouTube "Unverified App" warning removed for public users:
+1. Privacy Policy is now live at `/privacy` ✓
+2. Terms of Service is now live at `/tos` ✓
+3. Still needed: record a 2-min demo video (connect YouTube → upload video → confirm it's live on YouTube channel)
+4. Submit in Google Cloud Console → APIs & Services → OAuth consent screen → "Submit for verification"
+5. Add your own Gmail as a test user in the meantime to skip warnings during development
+
+---
+
+## What Was Built Last Session (2026-03-27)
 
 ### 1. Instagram Post Type Selector
 - Added `igPostType` state to compose page ("post" | "reel" | "story")
@@ -181,12 +276,17 @@ The migration SQL is in the "Scheduling: FIXED" section above. Run it in Supabas
 - Add proper metatags and SEO optimization
 - Keep it simple — don't repeat Metricool's wall-of-text mistake
 
-### 3. Legal Pages
-- Terms & Conditions
-- Privacy Policy
-- Cookies Policy
+### 3. Google OAuth Verification (for YouTube)
+- Add your Gmail as test user in Google Cloud Console → OAuth consent screen → Test users
+- Record 2-min demo video: connect YouTube → upload → confirm live
+- Submit for verification (takes 1–4 weeks)
 
-### 4. Phase 2 Features (after scheduling is fixed)
+### 4. Landing Page Improvements
+- Add FAQ section (SEO + user trust)
+- Add engaging images/illustrations
+- Add proper metatags and SEO optimization
+
+### 5. Phase 2 Features (after scheduling is fixed)
 - Media library (upload once, reuse anywhere)
 - Post preview by platform (phone mockups)
 - IG first comment scheduling
@@ -208,8 +308,20 @@ The migration SQL is in the "Scheduling: FIXED" section above. Run it in Supabas
 
 ---
 
-## Git Status (end of session)
+## Key Files to Know (Updated)
+
+### Legal Pages (new)
+- `src/app/(marketing)/privacy/page.tsx` — Privacy Policy (12 sections, Google Limited Use compliant)
+- `src/app/(marketing)/tos/page.tsx` — Terms of Service (15 sections)
+- `src/app/(marketing)/content-policy/page.tsx` — Content Policy (existed before)
+
+### Footer
+- `src/components/layout/footer.tsx` — now has Privacy / Terms / Content Policy links
+
+---
+
+## Git Status (end of session 2026-03-28)
 - Branch: master
-- Modified: `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/lib/constants.ts`, `supabase/schema.sql`
-- New files: `COMPETITIVE_ANALYSIS.md`, `IDEAS.md`, `LATEST_PROMPT.md`, `src/lib/moderation.ts`
+- Modified: `src/app/(app)/compose/page.tsx`, `src/app/(app)/scheduled/page.tsx`, `src/components/layout/footer.tsx`
+- New files: `src/app/(marketing)/privacy/page.tsx`, `src/app/(marketing)/tos/page.tsx`
 - Changes are NOT committed yet — user hasn't asked for a commit
