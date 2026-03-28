@@ -134,15 +134,6 @@ export const PLATFORMS = [
     comingSoon: true,
   },
   {
-    id: "kick",
-    name: "Kick",
-    description: "Livestream platform",
-    icon: "K",
-    color: "#53FC18",
-    textColor: "#0A0A0A",
-    comingSoon: true,
-  },
-  {
     id: "boosty",
     name: "Boosty",
     description: "Support creators",

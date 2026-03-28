@@ -279,10 +279,11 @@ export default function ComposePage() {
 
   // Auto-switch preview tab when current tab's platform is deselected
   useEffect(() => {
-    if (previewTab === "instagram" && !selected.includes("instagram") && selected.includes("youtube")) {
-      setPreviewTab("youtube");
-    } else if (previewTab === "youtube" && !selected.includes("youtube") && selected.includes("instagram")) {
-      setPreviewTab("instagram");
+    const currentSelected = selected.includes(previewTab);
+    if (!currentSelected) {
+      if (selected.includes("instagram")) setPreviewTab("instagram");
+      else if (selected.includes("youtube")) setPreviewTab("youtube");
+      else if (selected.includes("bluesky")) setPreviewTab("bluesky");
     }
   }, [selected, previewTab]);
 
@@ -1177,6 +1178,19 @@ export default function ComposePage() {
                     YouTube Preview
                   </button>
                 )}
+                {selected.includes("bluesky") && (
+                  <button
+                    onClick={() => setPreviewTab("bluesky")}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-xs font-bold border border-[#0A0A0A] transition-all",
+                      previewTab === "bluesky"
+                        ? "bg-[#0085FF] text-white shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "bg-white text-[#0A0A0A] hover:bg-[#F0F0F0]"
+                    )}
+                  >
+                    Bluesky Preview
+                  </button>
+                )}
               </div>
             )}
 
@@ -1419,6 +1433,65 @@ export default function ComposePage() {
                   </div>
                 )}
               </>
+            )}
+
+            {/* ── Bluesky Preview ── */}
+            {(selected.length === 1 ? selected.includes("bluesky") : previewTab === "bluesky" && selected.includes("bluesky")) && (
+              <div className="border border-[#0A0A0A] bg-white overflow-hidden shadow-[2px_2px_0px_0px_#0A0A0A]">
+                {/* Header */}
+                <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-[#E4E4E4]">
+                  <div className="w-8 h-8 bg-[#0085FF] flex items-center justify-center text-white text-xs font-black">
+                    {(connected.find((c) => c.platform === "bluesky")?.platform_username ?? "you")[0].toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-[#0A0A0A]">
+                      {connected.find((c) => c.platform === "bluesky")?.platform_username ?? "your.handle"}
+                    </div>
+                    <div className="text-[10px] text-[#5C5C5A]">just now</div>
+                  </div>
+                </div>
+                {/* Text */}
+                <div className="px-3 py-2">
+                  <p className="text-[13px] text-[#0A0A0A] whitespace-pre-wrap break-words">
+                    {title}{description ? `\n\n${description}` : ""}
+                  </p>
+                  <p className="text-[10px] text-[#5C5C5A] mt-1">
+                    {(`${title}${description ? "\n\n" + description : ""}`).length}/300 characters
+                  </p>
+                </div>
+                {/* Media */}
+                {currentPreview && (
+                  <div className="px-3 pb-3">
+                    {currentPreview.file.type.startsWith("video/") ? (
+                      <video
+                        src={currentPreview.preview}
+                        className="w-full border border-[#E4E4E4]"
+                        style={{ aspectRatio: "16/9", objectFit: "cover" }}
+                        muted
+                      />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={currentPreview.preview}
+                        alt="Preview"
+                        className="w-full border border-[#E4E4E4]"
+                        style={{ aspectRatio: "1/1", objectFit: "cover" }}
+                      />
+                    )}
+                    {mediaItems.length > 1 && (
+                      <p className="text-[10px] text-[#5C5C5A] mt-1">
+                        {Math.min(mediaItems.filter((m) => m.file.type.startsWith("image/")).length, 4)} of {mediaItems.filter((m) => m.file.type.startsWith("image/")).length} images (Bluesky max: 4)
+                      </p>
+                    )}
+                  </div>
+                )}
+                {/* Actions */}
+                <div className="flex items-center gap-4 px-3 py-2 border-t border-[#E4E4E4] text-[#5C5C5A]">
+                  <span className="text-xs">Reply</span>
+                  <span className="text-xs">Repost</span>
+                  <span className="text-xs">Like</span>
+                </div>
+              </div>
             )}
 
             {/* File info */}
