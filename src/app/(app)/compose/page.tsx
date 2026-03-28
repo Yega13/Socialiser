@@ -581,12 +581,20 @@ export default function ComposePage() {
   const instagramConnected = connected.find((c) => c.platform === "instagram");
   const needsMedia = youtubeSelected || instagramSelected;
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
+  const hasVideo = mediaItems.some((m) => m.file.type.startsWith("video/"));
   const canPost =
     !isPosting &&
     selected.length > 0 &&
     title.trim().length > 0 &&
     (!needsMedia || mediaItems.length > 0) &&
-    (!youtubeSelected || mediaItems.some((m) => m.file.type.startsWith("video/")));
+    (!youtubeSelected || hasVideo) &&
+    (!scheduleEnabled || scheduleDate.length > 0);
+  const postBlockReason =
+    youtubeSelected && !hasVideo && mediaItems.length > 0
+      ? "YouTube requires video — deselect YouTube or upload a video"
+      : scheduleEnabled && !scheduleDate
+      ? "Pick a date & time to schedule"
+      : null;
 
   const acceptTypes = youtubeSelected && !instagramSelected
     ? "video/*"
@@ -1055,6 +1063,9 @@ export default function ComposePage() {
             </button>
             {isPosting && postingStatus && (
               <p className="text-xs text-[#5C5C5A] text-center">{postingStatus}</p>
+            )}
+            {!isPosting && postBlockReason && (
+              <p className="text-xs text-[#FF4F4F] font-medium text-center">{postBlockReason}</p>
             )}
           </div>
         )}
