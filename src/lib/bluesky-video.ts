@@ -48,7 +48,7 @@ export async function uploadBlueskyVideo(
       `${pdsEndpoint}/xrpc/com.atproto.server.getServiceAuth?` +
         new URLSearchParams({
           aud: `did:web:${pdsHost}`,
-          lxm: "app.bsky.video.uploadVideo",
+          lxm: "com.atproto.repo.uploadBlob",
           exp: String(Math.floor(Date.now() / 1000) + 1800),
         }),
       { headers: { Authorization: `Bearer ${accessJwt}` } }
