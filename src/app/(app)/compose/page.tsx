@@ -205,7 +205,7 @@ export default function ComposePage() {
 
   const currentPreview = mediaItems[previewIndex] ?? null;
   const currentPreviewIsImage = currentPreview !== null && currentPreview.file.type.startsWith("image/");
-  const canDrag = aspectMode !== "original" && currentPreviewIsImage;
+  const canDrag = currentPreviewIsImage;
 
   const updateCropOffset = useCallback((clientX: number, clientY: number) => {
     if (!dragStart.current || !previewRef.current) return;
@@ -339,200 +339,178 @@ export default function ComposePage() {
     }
 
     setIsPosting(true);
+    setPostingStatus(`Posting to ${selected.length} platform${selected.length !== 1 ? "s" : ""} in parallel...`);
 
     const supabase = createClient();
-    const postResults: Record<string, { success: boolean; error?: string }> = {};
+
+    // Helper: refresh token for a platform, return fresh token or error
+    async function getFreshToken(conn: ConnectedPlatform, platformId: string): Promise<{ token: string } | { error: string }> {
+      let accessToken = conn.access_token;
+      if (conn.token_expires_at && new Date(conn.token_expires_at) <= new Date()) {
+        if (platformId === "youtube" && conn.refresh_token) {
+          const newToken = await refreshYouTubeToken(conn.refresh_token);
+          if (!newToken) return { error: "YouTube token expired. Reconnect in Settings." };
+          accessToken = newToken;
+          await supabase.from("connected_platforms").update({
+            access_token: newToken,
+            token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
+          }).eq("id", conn.id);
+        } else if (platformId === "instagram") {
+          const result = await refreshInstagramToken(accessToken);
+          if (!result) return { error: "Instagram token expired. Reconnect in Settings." };
+          accessToken = result.access_token;
+          await supabase.from("connected_platforms").update({
+            access_token: result.access_token,
+            token_expires_at: new Date(Date.now() + result.expires_in * 1000).toISOString(),
+          }).eq("id", conn.id);
+        } else if (platformId === "bluesky" && conn.refresh_token) {
+          const result = await refreshBlueskySession(conn.refresh_token);
+          if (!result) return { error: "Bluesky session expired. Reconnect in Settings." };
+          accessToken = result.accessJwt;
+          await supabase.from("connected_platforms").update({
+            access_token: result.accessJwt,
+            refresh_token: result.refreshJwt,
+            token_expires_at: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
+          }).eq("id", conn.id);
+        }
+      }
+      return { token: accessToken };
+    }
+
+    // Run all platforms in parallel
+    const platformPromises = selected.map(async (platformId): Promise<[string, { success: boolean; error?: string }]> => {
+      const conn = connected.find((c) => c.platform === platformId);
+      if (!conn) return [platformId, { success: false, error: "Not connected" }];
+
+      const tokenResult = await getFreshToken(conn, platformId);
+      if ("error" in tokenResult) return [platformId, { success: false, error: tokenResult.error }];
+      const accessToken = tokenResult.token;
+
+      // ── YouTube ──
+      if (platformId === "youtube") {
+        const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
+        if (!videoItem) return [platformId, { success: false, error: "YouTube requires a video file" }];
+        return [platformId, await postToYouTube(accessToken, title, description, videoItem.file, thumbnailBlob)];
+      }
+
+      // ── Instagram ──
+      if (platformId === "instagram") {
+        if (mediaItems.length === 0) return [platformId, { success: false, error: "Instagram requires at least one image or video" }];
+        if (!conn.platform_user_id) return [platformId, { success: false, error: "Instagram account ID missing. Reconnect." }];
+
+        // Upload all media files to Supabase IN PARALLEL
+        const uploadResults = await Promise.all(
+          mediaItems.map(async (item, i) => {
+            const isVideo = item.file.type.startsWith("video/");
+            let fileToUpload: File | Blob = item.file;
+            let uploadName = item.file.name;
+
+            if (!isVideo) {
+              const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
+              fileToUpload = prepared.blob;
+              uploadName = prepared.name;
+            }
+
+            const fileName = `instagram/${Date.now()}-${i}-${uploadName}`;
+            const { error: uploadError } = await supabase.storage
+              .from("media")
+              .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
+
+            if (uploadError) return { error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
+
+            const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
+            const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
+            return { url: mediaUrl, isVideo };
+          })
+        );
+
+        const firstUploadError = uploadResults.find((r) => "error" in r);
+        if (firstUploadError && "error" in firstUploadError) {
+          return [platformId, { success: false, error: firstUploadError.error }];
+        }
+
+        const uploadedItems = uploadResults as { url: string; isVideo: boolean }[];
+        const caption = `${title}${description ? "\n\n" + description : ""}`;
+
+        if (uploadedItems.length === 1) {
+          return [platformId, await postToInstagramServer(
+            accessToken,
+            conn.platform_user_id,
+            caption,
+            uploadedItems[0].url,
+            uploadedItems[0].isVideo,
+            effectiveIgPostType === "reel" ? "reel" : effectiveIgPostType === "story" ? "story" : "post"
+          )];
+        } else {
+          return [platformId, await postCarouselToInstagram(
+            accessToken,
+            conn.platform_user_id,
+            caption,
+            uploadedItems
+          )];
+        }
+      }
+
+      // ── Bluesky ──
+      if (platformId === "bluesky") {
+        const postText = `${title}${description ? "\n\n" + description : ""}`;
+
+        let bskyImages: { base64: string; mimeType: string; name: string }[] | undefined;
+        let bskyVideo: { base64: string; mimeType: string; name: string } | undefined;
+
+        if (mediaItems.length > 0) {
+          const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
+          if (videoItem) {
+            const buf = await videoItem.file.arrayBuffer();
+            const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
+            bskyVideo = { base64, mimeType: videoItem.file.type, name: videoItem.file.name };
+          } else {
+            const imageItems = mediaItems.filter((m) => m.file.type.startsWith("image/")).slice(0, 4);
+            if (imageItems.length > 0) {
+              bskyImages = await Promise.all(imageItems.map(async (img) => {
+                const { blob, name } = await prepareImageForInstagram(img.file, "#000000", 0.92, 1, img.cropOffset, filters);
+                const buf = await blob.arrayBuffer();
+                const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
+                return { base64, mimeType: "image/jpeg", name };
+              }));
+            }
+          }
+        }
+
+        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImages, bskyVideo)];
+      }
+
+      return [platformId, { success: false, error: "Unknown platform" }];
+    });
 
     try {
-      for (const platformId of selected) {
-        const conn = connected.find((c) => c.platform === platformId);
-        if (!conn) {
-          postResults[platformId] = { success: false, error: "Not connected" };
-          continue;
-        }
-
-        let accessToken = conn.access_token;
-
-        // Refresh token if expired
-        if (conn.token_expires_at && new Date(conn.token_expires_at) <= new Date()) {
-          if (platformId === "youtube" && conn.refresh_token) {
-            setPostingStatus("Refreshing YouTube token...");
-            const newToken = await refreshYouTubeToken(conn.refresh_token);
-            if (newToken) {
-              accessToken = newToken;
-              await supabase.from("connected_platforms").update({
-                access_token: newToken,
-                token_expires_at: new Date(Date.now() + 3600 * 1000).toISOString(),
-              }).eq("id", conn.id);
-            } else {
-              postResults[platformId] = { success: false, error: "YouTube token expired. Reconnect in Settings." };
-              continue;
-            }
-          } else if (platformId === "instagram") {
-            setPostingStatus("Refreshing Instagram token...");
-            const result = await refreshInstagramToken(accessToken);
-            if (result) {
-              accessToken = result.access_token;
-              await supabase.from("connected_platforms").update({
-                access_token: result.access_token,
-                token_expires_at: new Date(Date.now() + result.expires_in * 1000).toISOString(),
-              }).eq("id", conn.id);
-            } else {
-              postResults[platformId] = { success: false, error: "Instagram token expired. Reconnect in Settings." };
-              continue;
-            }
-          } else if (platformId === "bluesky" && conn.refresh_token) {
-            setPostingStatus("Refreshing Bluesky session...");
-            const result = await refreshBlueskySession(conn.refresh_token);
-            if (result) {
-              accessToken = result.accessJwt;
-              await supabase.from("connected_platforms").update({
-                access_token: result.accessJwt,
-                refresh_token: result.refreshJwt,
-                token_expires_at: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
-              }).eq("id", conn.id);
-            } else {
-              postResults[platformId] = { success: false, error: "Bluesky session expired. Reconnect in Settings." };
-              continue;
-            }
+      const results = await Promise.allSettled(platformPromises);
+      const postResults: Record<string, { success: boolean; error?: string }> = {};
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          const [platformId, platformResult] = result.value;
+          postResults[platformId] = platformResult;
+        } else {
+          // Shouldn't happen but catch rejected promises
+          const errMsg = result.reason instanceof Error ? result.reason.message : "Something went wrong";
+          // Can't easily map back to platformId, set for all unresolved
+          for (const pid of selected) {
+            if (!postResults[pid]) postResults[pid] = { success: false, error: errMsg };
           }
-        }
-
-        if (platformId === "youtube") {
-          const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
-          if (!videoItem) {
-            postResults[platformId] = { success: false, error: "YouTube requires a video file" };
-          } else {
-            setPostingStatus("Uploading to YouTube...");
-            postResults[platformId] = await postToYouTube(accessToken, title, description, videoItem.file, thumbnailBlob);
-          }
-        }
-
-        if (platformId === "instagram") {
-          if (mediaItems.length === 0) {
-            postResults[platformId] = { success: false, error: "Instagram requires at least one image or video" };
-          } else if (!conn.platform_user_id) {
-            postResults[platformId] = { success: false, error: "Instagram account ID missing. Reconnect." };
-          } else {
-            // Upload all media files to Supabase
-            const uploadedItems: { url: string; isVideo: boolean }[] = [];
-            let uploadFailed = false;
-
-            for (let i = 0; i < mediaItems.length; i++) {
-              const item = mediaItems[i];
-              const isVideo = item.file.type.startsWith("video/");
-
-              setPostingStatus(`Uploading file ${i + 1}/${mediaItems.length}...`);
-
-              let fileToUpload: File | Blob = item.file;
-              let uploadName = item.file.name;
-
-              if (!isVideo) {
-                const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-                const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
-                fileToUpload = prepared.blob;
-                uploadName = prepared.name;
-              }
-
-              const fileName = `instagram/${Date.now()}-${i}-${uploadName}`;
-              const { error: uploadError } = await supabase.storage
-                .from("media")
-                .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
-
-              if (uploadError) {
-                postResults[platformId] = { success: false, error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
-                uploadFailed = true;
-                break;
-              }
-
-              const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
-              const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
-              uploadedItems.push({ url: mediaUrl, isVideo });
-            }
-
-            if (!uploadFailed) {
-              const caption = `${title}${description ? "\n\n" + description : ""}`;
-
-              if (uploadedItems.length === 1) {
-                // Single post
-                const typeLabel = effectiveIgPostType === "story"
-                  ? "Publishing story..."
-                  : effectiveIgPostType === "reel"
-                  ? "Publishing reel..."
-                  : uploadedItems[0].isVideo
-                  ? "Publishing video post..."
-                  : "Publishing to Instagram...";
-                setPostingStatus(typeLabel);
-                postResults[platformId] = await postToInstagramServer(
-                  accessToken,
-                  conn.platform_user_id,
-                  caption,
-                  uploadedItems[0].url,
-                  uploadedItems[0].isVideo,
-                  effectiveIgPostType === "reel" ? "reel" : effectiveIgPostType === "story" ? "story" : "post"
-                );
-              } else {
-                // Carousel post
-                setPostingStatus(`Publishing carousel (${uploadedItems.length} items)...`);
-                postResults[platformId] = await postCarouselToInstagram(
-                  accessToken,
-                  conn.platform_user_id,
-                  caption,
-                  uploadedItems
-                );
-              }
-            }
-          }
-        }
-
-        if (platformId === "bluesky") {
-          const postText = `${title}${description ? "\n\n" + description : ""}`;
-          setPostingStatus("Posting to Bluesky...");
-
-          // Prepare media for Bluesky
-          let bskyImages: { bytes: number[]; mimeType: string; name: string }[] | undefined;
-          let bskyVideo: { bytes: number[]; mimeType: string; name: string } | undefined;
-
-          if (mediaItems.length > 0) {
-            const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
-            if (videoItem) {
-              setPostingStatus("Preparing video for Bluesky...");
-              const bytes = Array.from(new Uint8Array(await videoItem.file.arrayBuffer()));
-              bskyVideo = { bytes, mimeType: videoItem.file.type, name: videoItem.file.name };
-            } else {
-              // Images (up to 4, max 1MB each)
-              const imageItems = mediaItems.filter((m) => m.file.type.startsWith("image/")).slice(0, 4);
-              if (imageItems.length > 0) {
-                setPostingStatus(`Preparing ${imageItems.length} image${imageItems.length > 1 ? "s" : ""} for Bluesky...`);
-                bskyImages = [];
-                for (const img of imageItems) {
-                  const bytes = Array.from(new Uint8Array(await img.file.arrayBuffer()));
-                  bskyImages.push({ bytes, mimeType: img.file.type, name: img.file.name });
-                }
-              }
-            }
-          }
-
-          postResults[platformId] = await postToBlueskyServer(
-            accessToken,
-            conn.platform_user_id!,
-            postText,
-            bskyImages,
-            bskyVideo
-          );
         }
       }
+      setResults(postResults);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Something went wrong";
+      const postResults: Record<string, { success: boolean; error?: string }> = {};
       for (const platformId of selected) {
-        if (!postResults[platformId]) {
-          postResults[platformId] = { success: false, error: message };
-        }
+        postResults[platformId] = { success: false, error: message };
       }
+      setResults(postResults);
     }
 
     setPostingStatus("");
-    setResults(postResults);
     setIsPosting(false);
   }
 
@@ -808,7 +786,7 @@ export default function ComposePage() {
                     <span className="truncate flex-1">{item.file.name}</span>
                     <span>({(item.file.size / 1024 / 1024).toFixed(1)} MB)</span>
                     {item.needsPadding && instagramSelected && aspectMode === "original" && (
-                      <span className="text-[#FF4F4F] font-bold text-[10px]">PAD</span>
+                      <span className="text-[#FF4F4F] font-bold text-[10px]" title="Image ratio outside 4:5–1.91:1 — colored bars will be added">PAD</span>
                     )}
                     {!item.file.type.startsWith("video/") && instagramSelected && aspectMode !== "original" && (
                       <span className="text-[#0095F6] font-bold text-[10px]">CROP</span>
@@ -1254,14 +1232,9 @@ export default function ComposePage() {
                         src={currentPreview.preview}
                         alt="Preview"
                         draggable={false}
-                        className={cn(
-                          "w-full h-full pointer-events-none",
-                          aspectMode === "original" ? "object-contain" : "object-cover"
-                        )}
+                        className="w-full h-full pointer-events-none object-cover"
                         style={{
-                          ...(aspectMode !== "original" ? {
-                            objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%`,
-                          } : {}),
+                          objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%`,
                           filter: `brightness(${filters.brightness}%) contrast(${filters.contrast}%) saturate(${filters.saturation}%)`,
                         }}
                       />
@@ -1327,7 +1300,7 @@ export default function ComposePage() {
                 </div>
 
                 {/* Drag hint */}
-                {canDrag && currentPreviewIsImage && (
+                {currentPreviewIsImage && (
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-[#5C5C5A]">Drag image to reposition</span>
                     {(currentPreview!.cropOffset.x !== 0.5 || currentPreview!.cropOffset.y !== 0.5) && (
@@ -1471,12 +1444,20 @@ export default function ComposePage() {
                       />
                     ) : (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img
-                        src={currentPreview.preview}
-                        alt="Preview"
-                        className="w-full border border-[#E4E4E4]"
-                        style={{ aspectRatio: "1/1", objectFit: "cover" }}
-                      />
+                      <div
+                        className={cn("relative overflow-hidden select-none border border-[#E4E4E4]", canDrag && "cursor-grab", canDrag && isDragging && "cursor-grabbing")}
+                        style={{ aspectRatio: "1/1" }}
+                        onMouseDown={(e) => { e.preventDefault(); handleDragStart(e.clientX, e.clientY); }}
+                        onTouchStart={(e) => handleDragStart(e.touches[0].clientX, e.touches[0].clientY)}
+                      >
+                        <img
+                          src={currentPreview.preview}
+                          alt="Preview"
+                          draggable={false}
+                          className="w-full h-full pointer-events-none object-cover"
+                          style={{ objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%` }}
+                        />
+                      </div>
                     )}
                     {mediaItems.length > 1 && (
                       <p className="text-[10px] text-[#5C5C5A] mt-1">

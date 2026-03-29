@@ -351,8 +351,8 @@ export default function ScheduledPage() {
           setProcessingStatus("Posting to Bluesky...");
           const postText = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
 
-          let bskyImages: { bytes: number[]; mimeType: string; name: string }[] | undefined;
-          let bskyVideo: { bytes: number[]; mimeType: string; name: string } | undefined;
+          let bskyImages: { base64: string; mimeType: string; name: string }[] | undefined;
+          let bskyVideo: { base64: string; mimeType: string; name: string } | undefined;
 
           if (post.media_urls && post.media_urls.length > 0) {
             for (let i = 0; i < (post.media_urls as string[]).length; i++) {
@@ -364,15 +364,16 @@ export default function ScheduledPage() {
 
               const fileRes = await fetch(signedUrl);
               if (!fileRes.ok) continue;
-              const bytes = Array.from(new Uint8Array(await fileRes.arrayBuffer()));
+              const buf = await fileRes.arrayBuffer();
+              const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
 
               if (isVideo && !bskyVideo) {
-                bskyVideo = { bytes, mimeType, name: stored.split("/").pop() || "video.mp4" };
+                bskyVideo = { base64, mimeType, name: stored.split("/").pop() || "video.mp4" };
                 break; // Bluesky supports 1 video per post
               } else if (!isVideo) {
                 if (!bskyImages) bskyImages = [];
                 if (bskyImages.length < 4) {
-                  bskyImages.push({ bytes, mimeType, name: stored.split("/").pop() || "image.jpg" });
+                  bskyImages.push({ base64, mimeType, name: stored.split("/").pop() || "image.jpg" });
                 }
               }
             }

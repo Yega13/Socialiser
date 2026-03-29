@@ -761,8 +761,8 @@ export default async function CronPage({
       if (platformId === "bluesky") {
         try {
           const postText = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
-          let bskyImages: { bytes: number[]; mimeType: string; name: string }[] | undefined;
-          let bskyVideo: { bytes: number[]; mimeType: string; name: string } | undefined;
+          let bskyImages: { buf: ArrayBuffer; mimeType: string; name: string }[] | undefined;
+          let bskyVideo: { buf: ArrayBuffer; mimeType: string; name: string } | undefined;
 
           if (post.media_urls && (post.media_urls as string[]).length > 0) {
             for (let i = 0; i < (post.media_urls as string[]).length; i++) {
@@ -774,15 +774,15 @@ export default async function CronPage({
 
               const fileRes = await fetch(fileUrl);
               if (!fileRes.ok) continue;
-              const bytes = Array.from(new Uint8Array(await fileRes.arrayBuffer()));
+              const buf = await fileRes.arrayBuffer();
 
               if (isVideo && !bskyVideo) {
-                bskyVideo = { bytes, mimeType, name: stored.split("/").pop() || "video.mp4" };
+                bskyVideo = { buf, mimeType, name: stored.split("/").pop() || "video.mp4" };
                 break;
               } else if (!isVideo) {
                 if (!bskyImages) bskyImages = [];
                 if (bskyImages.length < 4) {
-                  bskyImages.push({ bytes, mimeType, name: stored.split("/").pop() || "image.jpg" });
+                  bskyImages.push({ buf, mimeType, name: stored.split("/").pop() || "image.jpg" });
                 }
               }
             }
@@ -817,7 +817,7 @@ export default async function CronPage({
               const upRes = await fetch(`${BSKY_API}/com.atproto.repo.uploadBlob`, {
                 method: "POST",
                 headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": img.mimeType },
-                body: new Uint8Array(img.bytes),
+                body: img.buf,
               });
               if (!upRes.ok) { results[platformId] = { success: false, error: "Bluesky image upload failed" }; break; }
               const upData = await upRes.json();
@@ -849,7 +849,7 @@ export default async function CronPage({
 
             const upRes = await fetch(
               `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?did=${encodeURIComponent(conn.platform_user_id)}&name=${encodeURIComponent(bskyVideo.name)}`,
-              { method: "POST", headers: { Authorization: `Bearer ${svcToken}`, "Content-Type": "video/mp4" }, body: new Uint8Array(bskyVideo.bytes) }
+              { method: "POST", headers: { Authorization: `Bearer ${svcToken}`, "Content-Type": "video/mp4" }, body: bskyVideo.buf }
             );
             if (!upRes.ok) { results[platformId] = { success: false, error: "Bluesky video upload failed" }; continue; }
             const upData = await upRes.json();

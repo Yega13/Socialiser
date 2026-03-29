@@ -180,22 +180,23 @@ export async function postCarouselToInstagram(
       return { success: false, error: "Carousel requires 2-10 items" };
     }
 
-    // Step 1: Create ALL child containers first (let Instagram process in parallel)
-    const containers: { id: string; index: number }[] = [];
-    for (let i = 0; i < items.length; i++) {
-      const item = items[i];
-      const params: Record<string, string> = { is_carousel_item: "true" };
-      if (item.isVideo) {
-        params.media_type = "VIDEO";
-        params.video_url = item.url;
-      } else {
-        params.image_url = item.url;
-      }
-
-      const container = await createIgContainer(accessToken, igUserId, params);
-      if (!container.id) return { success: false, error: `Item ${i + 1}: ${container.error}` };
-      containers.push({ id: container.id, index: i });
-    }
+    // Step 1: Create ALL child containers IN PARALLEL
+    const containerResults = await Promise.all(
+      items.map(async (item, i) => {
+        const params: Record<string, string> = { is_carousel_item: "true" };
+        if (item.isVideo) {
+          params.media_type = "VIDEO";
+          params.video_url = item.url;
+        } else {
+          params.image_url = item.url;
+        }
+        const container = await createIgContainer(accessToken, igUserId, params);
+        return { id: container.id, error: container.error, index: i };
+      })
+    );
+    const firstContainerError = containerResults.find((c) => !c.id);
+    if (firstContainerError) return { success: false, error: `Item ${firstContainerError.index + 1}: ${firstContainerError.error}` };
+    const containers = containerResults as { id: string; index: number }[];
 
     // Step 2: Wait for ALL containers IN PARALLEL (Instagram processes simultaneously)
     const waitResults = await Promise.all(
@@ -381,8 +382,8 @@ export async function postToBlueskyServer(
   accessJwt: string,
   did: string,
   text: string,
-  images?: { bytes: number[]; mimeType: string; name: string }[],
-  video?: { bytes: number[]; mimeType: string; name: string }
+  images?: { base64: string; mimeType: string; name: string }[],
+  video?: { base64: string; mimeType: string; name: string }
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const facets = detectFacets(text);
@@ -394,26 +395,26 @@ export async function postToBlueskyServer(
       ...(facets.length > 0 && { facets }),
     };
 
-    // Embed images (up to 4)
+    // Embed images (up to 4) — upload in parallel
     if (images && images.length > 0) {
-      const uploadedImages: Record<string, unknown>[] = [];
-      for (const img of images.slice(0, 4)) {
-        const result = await bskyUploadBlob(accessJwt, new Uint8Array(img.bytes).buffer, img.mimeType);
-        if (result.error) return { success: false, error: `Image upload: ${result.error}` };
-        uploadedImages.push({
-          alt: "",
-          image: result.blob,
-        });
-      }
+      const uploadResults = await Promise.all(
+        images.slice(0, 4).map(async (img) => {
+          const binary = Uint8Array.from(atob(img.base64), (c) => c.charCodeAt(0));
+          return bskyUploadBlob(accessJwt, binary.buffer, img.mimeType);
+        })
+      );
+      const firstError = uploadResults.find((r) => r.error);
+      if (firstError) return { success: false, error: `Image upload: ${firstError.error}` };
       record.embed = {
         $type: "app.bsky.embed.images",
-        images: uploadedImages,
+        images: uploadResults.map((r) => ({ alt: "", image: r.blob })),
       };
     }
 
     // Embed video (1 max, overrides images)
     if (video) {
-      const result = await bskyUploadVideo(accessJwt, did, new Uint8Array(video.bytes).buffer, video.name);
+      const binary = Uint8Array.from(atob(video.base64), (c) => c.charCodeAt(0));
+      const result = await bskyUploadVideo(accessJwt, did, binary.buffer, video.name);
       if (result.error) return { success: false, error: `Video upload: ${result.error}` };
       record.embed = {
         $type: "app.bsky.embed.video",

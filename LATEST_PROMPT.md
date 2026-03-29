@@ -1,4 +1,4 @@
-# Socialiser — Session Handoff (2026-03-28)
+# Socialiser — Session Handoff (2026-03-29)
 
 Read this ENTIRE file before doing anything. It contains full context from the previous session.
 
@@ -30,31 +30,36 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 ## What Works Right Now
 - **YouTube**: Connect (OAuth), disconnect, video upload with custom thumbnails — all working
 - **Instagram**: Connect (OAuth), disconnect, post images, carousels (2-10 items), reels, video posts, and stories — all working
+- **Bluesky**: Connect (handle + app password), disconnect, post text/images/video — all working
 - **Post type selection**: When uploading to Instagram, user picks post type via neo-brutalist chips:
   - Single image → Feed Post or Story
   - Single video → Video Post, Reel, or Story
   - Carousel (2+ files) → Carousel (auto, no choice needed)
-- **Scheduling**: Working reliably with state machine cron — FIXED (see below)
+- **Scheduling**: Working reliably with state machine cron (YouTube, Instagram, Bluesky) — FIXED
 - **Theme**: Light by default, persists user preference via localStorage
-- **Preview**: Live preview panel showing how post looks on IG (with type badge) and YouTube
-- **Image processing**: Aspect ratio cropping, padding, quality slider, brightness/contrast/saturation filters
+- **Preview**: Live preview panel for Instagram (with type badge), YouTube (with thumbnail picker), and Bluesky (with drag-to-crop)
+- **Image processing**: Aspect ratio cropping with drag-to-reposition, padding, quality slider, brightness/contrast/saturation filters
+- **Parallel posting**: All platforms post simultaneously, Supabase uploads in parallel, IG containers created in parallel
 - **Legal pages**: Privacy Policy (/privacy), Terms of Service (/tos), Content Policy (/content-policy) — all live
-- **16 routes build cleanly**
+- **18 routes build cleanly**
 
 ## Platforms in Constants (src/lib/constants.ts)
 - YouTube — LIVE, working
 - Instagram — LIVE, working
+- Bluesky — LIVE, working (connect, post text/images/video, scheduling)
 - X/Twitter — coming soon
 - LinkedIn — coming soon
 - Threads — coming soon
 - TikTok — coming soon
-- Facebook — coming soon
+- Facebook — coming soon (blocked by Meta business verification)
 - VK — coming soon
 - Snapchat — coming soon
 - Pinterest — coming soon
-- Twitch — coming soon (added this session)
-- Bluesky — coming soon (added this session)
-- Mastodon — coming soon (added this session)
+- Twitch — coming soon
+- Mastodon — coming soon
+- Reddit — coming soon (added 2026-03-28)
+- Boosty — coming soon (added 2026-03-28)
+- ~~Kick~~ — REMOVED (no public API exists)
 
 ---
 
@@ -88,7 +93,68 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 
 ---
 
-## What Was Built This Session (2026-03-28)
+## What Was Built This Session (2026-03-28 → 2026-03-29)
+
+### Bluesky Integration (Full)
+**Files:** `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/components/dashboard/platform-card.tsx`, `src/app/(app)/scheduled/page.tsx`, `src/app/cron/page.tsx`
+
+Complete Bluesky integration:
+- **Connect flow**: Inline form on platform card — user enters Bluesky handle + app password. Authenticates via `com.atproto.server.createSession`, stores DID, accessJwt, refreshJwt, handle in `connected_platforms`.
+- **Token refresh**: `refreshBlueskySession()` server action via `com.atproto.server.refreshSession`. accessJwt lasts 2hrs, refreshJwt 90 days.
+- **Post text with rich text**: `detectFacets()` finds URLs and #hashtags with proper UTF-8 byte offsets for AT Protocol facets.
+- **Image upload**: Up to 4 images via `com.atproto.repo.uploadBlob`. Images are cropped to 1:1 using the user's drag offset (same `prepareImageForInstagram` function), then base64-encoded for server action transport.
+- **Video upload**: Resolves user's PDS host from `plc.directory/{did}`, gets service auth with `aud=did:web:{pdsHost}`, uploads to `video.bsky.app`, polls `getJobStatus` up to 120 iterations (4 min).
+- **Preview panel**: Shows in compose page — avatar, handle, "just now", text content with 300-char counter, media preview (video 16:9 or image 1:1 with drag-to-crop), action bar (Reply/Repost/Like).
+- **Scheduling**: Full support in cron page — refreshes Bluesky tokens, uploads images/video, creates post with facets.
+- **Scheduled page**: Retry and process-now both handle Bluesky posts.
+
+### 6 Critical Bug Fixes
+1. **UI freeze on network error** — `handlePost()` and `handleSchedule()` had no try/catch, so network errors left `isPosting` stuck true forever. Wrapped in try/catch.
+2. **Silent token refresh failures** — If refresh returned null, code proceeded with expired token. Added explicit error messages and `continue` to next platform.
+3. **Schedule time mismatch** — Picker enforced 6min, validation checked 3min, error said 5min. Standardized validation to 4min.
+4. **`retryScheduledPost` used server Supabase client** — Only server action using `createServerClient`, crashes on CF Workers. Moved to client-side browser client.
+5. **Swallowed errors in `handleProcessNow`** — Bare `catch {}` gave no feedback. Added `processingError` state and red error banner.
+6. **Stale results on reschedule** — `reschedulePost` didn't clear old `results`. Added `results: null`.
+
+### Bluesky Video 401 Fix
+**Root cause:** `aud` parameter in `getServiceAuth` was `did:web:video.bsky.app` (wrong). Must be `did:web:{pdsHost}` where pdsHost is resolved from `plc.directory/{did}`.
+**Fixed in:** `compose/actions.ts` and `cron/page.tsx`.
+
+### Back-to-Top Button
+**File:** `src/components/ui/back-to-top.tsx` (new), `src/app/layout.tsx`
+- Client component, appears after scrolling 400px
+- Fixed position bottom-right, **circular** (`rounded-full`)
+- Neo-brutalist: black bg, white arrow, violet shadow
+- Smooth scroll via `window.scrollTo({ top: 0, behavior: "smooth" })`
+
+### Kick Removed
+Removed from `src/lib/constants.ts` — Kick has no public API for posting.
+
+### Reddit & Boosty Added
+Added to constants as coming soon: Reddit (#FF4500), Boosty (#F15F2C).
+
+### Drag-to-Crop Everywhere
+- **Before:** Drag only worked in non-"original" crop modes for Instagram preview only
+- **After:** Drag works in ALL modes (original, 1:1, 4:5, 1.91:1) and in BOTH Instagram and Bluesky previews
+- Bluesky images are cropped to 1:1 using the user's drag offset before uploading
+- Instagram preview always uses `object-cover` with `objectPosition` based on drag offset
+
+### Parallel Posting (Major Speed Improvement)
+**Before:** Platforms posted sequentially (YouTube → Instagram → Bluesky), Supabase uploads one-by-one, IG containers created one-by-one. 7 files = ~10 minutes.
+**After:**
+- All platforms post **simultaneously** via `Promise.allSettled`
+- All Supabase media uploads run **in parallel** via `Promise.all`
+- All Instagram carousel containers created **in parallel**
+- Bluesky image uploads run **in parallel**
+- Bluesky uses **base64** encoding instead of `number[]` (JSON payload ~3x smaller, much faster serialization)
+- Token refreshes happen per-platform independently
+
+### PAD Label Tooltip
+Added `title` attribute to PAD label: "Image ratio outside 4:5–1.91:1 — colored bars will be added"
+
+---
+
+## What Was Built Previous Session (2026-03-28)
 
 ### 1. Schedule Button Greyed-Out Fix (compose page)
 **Root cause:** `canPost` had no check for `scheduleEnabled=true` but empty `scheduleDate`, and no check for YouTube+images conflict.
@@ -236,15 +302,15 @@ This column ALREADY EXISTS in the live database. Don't try to add it again.
 ## Key Files to Know
 
 ### Core App
-- `src/app/(app)/compose/page.tsx` — main compose/posting page (~1260 lines)
-- `src/app/(app)/compose/actions.ts` — server actions for posting + scheduling (~447 lines)
+- `src/app/(app)/compose/page.tsx` — main compose/posting page (~1540 lines, parallel posting, 3 preview panels)
+- `src/app/(app)/compose/actions.ts` — server actions for YouTube/Instagram/Bluesky posting (~448 lines)
 - `src/app/(app)/dashboard/` — main dashboard
 - `src/app/(app)/settings/` — settings page with theme toggle
 - `src/app/(app)/scheduled/` — scheduled posts page
 - `src/app/(marketing)/` — landing page (public)
 
 ### Config & Utils
-- `src/lib/constants.ts` — SITE_CONFIG, PLATFORMS array (13 platforms)
+- `src/lib/constants.ts` — SITE_CONFIG, PLATFORMS array (15 platforms)
 - `src/lib/supabase/client.ts` — browser Supabase client
 - `src/lib/supabase/server.ts` — server Supabase client (DON'T use in API routes on CF Workers)
 - `src/lib/utils.ts` — cn() helper
@@ -320,8 +386,8 @@ The migration SQL is in the "Scheduling: FIXED" section above. Run it in Supabas
 
 ---
 
-## Git Status (end of session 2026-03-28)
+## Git Status (end of session 2026-03-29)
 - Branch: master
-- Modified: `src/app/(app)/compose/page.tsx`, `src/app/(app)/scheduled/page.tsx`, `src/components/layout/footer.tsx`
-- New files: `src/app/(marketing)/privacy/page.tsx`, `src/app/(marketing)/tos/page.tsx`
+- Modified: `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/app/(app)/scheduled/page.tsx`, `src/app/cron/page.tsx`, `src/components/dashboard/platform-card.tsx`, `src/lib/constants.ts`, `src/app/layout.tsx`, `LATEST_PROMPT.md`
+- New files: `src/components/ui/back-to-top.tsx`
 - Changes are NOT committed yet — user hasn't asked for a commit
