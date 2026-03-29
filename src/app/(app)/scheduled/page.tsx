@@ -10,6 +10,7 @@ import {
   postCarouselToInstagram,
   postToBlueskyServer,
 } from "@/app/(app)/compose/actions";
+import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import { cn } from "@/lib/utils";
 
 type ScheduledPost = {
@@ -352,7 +353,7 @@ export default function ScheduledPage() {
           const postText = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
 
           let bskyImages: { base64: string; mimeType: string; name: string }[] | undefined;
-          let bskyVideo: { base64: string; mimeType: string; name: string } | undefined;
+          let bskyVideoBlob: { $type: string; ref: { $link: string }; mimeType: string; size: number } | null = null;
 
           if (post.media_urls && post.media_urls.length > 0) {
             for (let i = 0; i < (post.media_urls as string[]).length; i++) {
@@ -362,15 +363,24 @@ export default function ScheduledPage() {
               const signedUrl = await resolveToSignedUrl(supabase, stored);
               if (!signedUrl) continue;
 
-              const fileRes = await fetch(signedUrl);
-              if (!fileRes.ok) continue;
-              const buf = await fileRes.arrayBuffer();
-              const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
-
-              if (isVideo && !bskyVideo) {
-                bskyVideo = { base64, mimeType, name: stored.split("/").pop() || "video.mp4" };
+              if (isVideo && !bskyVideoBlob) {
+                // Fetch video and upload client-side directly to Bluesky
+                const fileRes = await fetch(signedUrl);
+                if (!fileRes.ok) continue;
+                const videoBlob = await fileRes.blob();
+                const videoResult = await uploadBlueskyVideo(
+                  accessToken, conn.platform_user_id!, videoBlob,
+                  stored.split("/").pop() || "video.mp4",
+                  (msg) => setProcessingStatus(msg)
+                );
+                if (videoResult.blob) bskyVideoBlob = videoResult.blob;
+                else if (videoResult.error) { results[platformId] = { success: false, error: `Video: ${videoResult.error}` }; }
                 break; // Bluesky supports 1 video per post
               } else if (!isVideo) {
+                const fileRes = await fetch(signedUrl);
+                if (!fileRes.ok) continue;
+                const buf = await fileRes.arrayBuffer();
+                const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
                 if (!bskyImages) bskyImages = [];
                 if (bskyImages.length < 4) {
                   bskyImages.push({ base64, mimeType, name: stored.split("/").pop() || "image.jpg" });
@@ -379,13 +389,15 @@ export default function ScheduledPage() {
             }
           }
 
-          results[platformId] = await postToBlueskyServer(
-            accessToken,
-            conn.platform_user_id!,
-            postText,
-            bskyImages,
-            bskyVideo
-          );
+          if (!results[platformId]) {
+            results[platformId] = await postToBlueskyServer(
+              accessToken,
+              conn.platform_user_id!,
+              postText,
+              bskyImages,
+              bskyVideoBlob
+            );
+          }
         }
       }
 

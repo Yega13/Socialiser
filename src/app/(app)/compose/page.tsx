@@ -6,6 +6,8 @@ import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { refreshYouTubeToken, refreshInstagramToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToBlueskyServer } from "./actions";
+import { uploadBlueskyVideo } from "@/lib/bluesky-video";
+import type { BskyBlob } from "@/lib/bluesky-video";
 import { moderatePost } from "@/lib/moderation";
 
 type ConnectedPlatform = {
@@ -457,14 +459,18 @@ export default function ComposePage() {
         const postText = `${title}${description ? "\n\n" + description : ""}`;
 
         let bskyImages: { base64: string; mimeType: string; name: string }[] | undefined;
-        let bskyVideo: { base64: string; mimeType: string; name: string } | undefined;
+        let bskyVideoBlob: BskyBlob | null = null;
 
         if (mediaItems.length > 0) {
           const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
           if (videoItem) {
-            const buf = await videoItem.file.arrayBuffer();
-            const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
-            bskyVideo = { base64, mimeType: videoItem.file.type, name: videoItem.file.name };
+            // Upload video CLIENT-SIDE directly to Bluesky (no server action for large files)
+            const videoResult = await uploadBlueskyVideo(
+              accessToken, conn.platform_user_id!, videoItem.file, videoItem.file.name,
+              (msg) => setPostingStatus(msg)
+            );
+            if (videoResult.error) return [platformId, { success: false, error: `Video upload: ${videoResult.error}` }];
+            bskyVideoBlob = videoResult.blob ?? null;
           } else {
             const imageItems = mediaItems.filter((m) => m.file.type.startsWith("image/")).slice(0, 4);
             if (imageItems.length > 0) {
@@ -478,7 +484,8 @@ export default function ComposePage() {
           }
         }
 
-        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImages, bskyVideo)];
+        setPostingStatus("Creating Bluesky post...");
+        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImages, bskyVideoBlob)];
       }
 
       return [platformId, { success: false, error: "Unknown platform" }];

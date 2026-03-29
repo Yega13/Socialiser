@@ -279,78 +279,6 @@ async function bskyUploadBlob(
   return { blob: data.blob };
 }
 
-async function bskyUploadVideo(
-  accessJwt: string,
-  did: string,
-  fileBytes: ArrayBuffer,
-  fileName: string
-): Promise<{ blob?: { $type: string; ref: { $link: string }; mimeType: string; size: number }; error?: string }> {
-  // Step 1: Resolve user's PDS endpoint from DID document
-  // getServiceAuth MUST be called on the user's actual PDS, not bsky.social
-  let pdsEndpoint = "https://bsky.social";
-  try {
-    const plcRes = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
-    if (plcRes.ok) {
-      const plcData = await plcRes.json();
-      const pdsService = plcData.service?.find((s: { id: string; serviceEndpoint: string }) => s.id === "#atproto_pds");
-      if (pdsService?.serviceEndpoint) {
-        pdsEndpoint = pdsService.serviceEndpoint.replace(/\/$/, "");
-      }
-    }
-  } catch { /* fallback to bsky.social */ }
-
-  // Step 2: Get service auth token from user's PDS
-  // aud = video service DID, lxm = the method we'll call on it
-  const authRes = await fetch(
-    `${pdsEndpoint}/xrpc/com.atproto.server.getServiceAuth?aud=${encodeURIComponent("did:web:video.bsky.app")}&lxm=app.bsky.video.uploadVideo&exp=${Math.floor(Date.now() / 1000) + 1800}`,
-    { headers: { Authorization: `Bearer ${accessJwt}` } }
-  );
-  if (!authRes.ok) {
-    const authErr = await authRes.json().catch(() => ({}));
-    return { error: `Video auth failed (${authRes.status}): ${authErr?.message || "unknown"} [PDS: ${pdsEndpoint}]` };
-  }
-  const { token: serviceToken } = await authRes.json();
-
-  // Step 3: Upload to video service
-  const uploadRes = await fetch(
-    `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?did=${encodeURIComponent(did)}&name=${encodeURIComponent(fileName)}`,
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${serviceToken}`,
-        "Content-Type": "video/mp4",
-      },
-      body: fileBytes,
-    }
-  );
-  if (!uploadRes.ok) {
-    const err = await uploadRes.json().catch(() => ({}));
-    return { error: err?.message || `Video upload failed (${uploadRes.status})` };
-  }
-  const uploadData = await uploadRes.json();
-
-  // Step 3: Poll for processing completion
-  const jobId = uploadData.jobId;
-  if (!jobId) return { blob: uploadData.blob };
-
-  for (let i = 0; i < 120; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
-    const statusRes = await fetch(
-      `https://video.bsky.app/xrpc/app.bsky.video.getJobStatus?jobId=${encodeURIComponent(jobId)}`,
-      { headers: { Authorization: `Bearer ${accessJwt}` } }
-    );
-    if (!statusRes.ok) continue;
-    const statusData = await statusRes.json();
-    if (statusData.jobStatus?.state === "JOB_STATE_COMPLETED") {
-      return { blob: statusData.jobStatus.blob };
-    }
-    if (statusData.jobStatus?.state === "JOB_STATE_FAILED") {
-      return { error: statusData.jobStatus?.error || "Video processing failed" };
-    }
-  }
-  return { error: "Video processing timed out (4 min)" };
-}
-
 function detectFacets(text: string): { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] {
   const encoder = new TextEncoder();
   const facets: { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] = [];
@@ -386,7 +314,7 @@ export async function postToBlueskyServer(
   did: string,
   text: string,
   images?: { base64: string; mimeType: string; name: string }[],
-  video?: { base64: string; mimeType: string; name: string }
+  videoBlob?: { $type: string; ref: { $link: string }; mimeType: string; size: number } | null
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const facets = detectFacets(text);
@@ -414,14 +342,11 @@ export async function postToBlueskyServer(
       };
     }
 
-    // Embed video (1 max, overrides images)
-    if (video) {
-      const binary = Uint8Array.from(atob(video.base64), (c) => c.charCodeAt(0));
-      const result = await bskyUploadVideo(accessJwt, did, binary.buffer, video.name);
-      if (result.error) return { success: false, error: `Video upload: ${result.error}` };
+    // Embed video (pre-uploaded blob from client)
+    if (videoBlob) {
       record.embed = {
         $type: "app.bsky.embed.video",
-        video: result.blob,
+        video: videoBlob,
         alt: "",
       };
     }

@@ -840,16 +840,28 @@ export default async function CronPage({
               }
             } catch { /* fallback */ }
 
-            const authRes = await fetch(
-              `${pdsEndpoint}/xrpc/com.atproto.server.getServiceAuth?aud=${encodeURIComponent("did:web:video.bsky.app")}&lxm=app.bsky.video.uploadVideo&exp=${Math.floor(Date.now() / 1000) + 1800}`,
-              { headers: { Authorization: `Bearer ${accessToken}` } }
-            );
-            if (!authRes.ok) { results[platformId] = { success: false, error: "Bluesky video auth failed" }; continue; }
-            const { token: svcToken } = await authRes.json();
+            // Try PDS first, fall back to bsky.social
+            let svcToken: string | null = null;
+            const authParams = new URLSearchParams({
+              aud: "did:web:video.bsky.app",
+              lxm: "app.bsky.video.uploadVideo",
+              exp: String(Math.floor(Date.now() / 1000) + 1800),
+            });
+            const endpoints = [pdsEndpoint, ...(pdsEndpoint !== "https://bsky.social" ? ["https://bsky.social"] : [])];
+            for (const ep of endpoints) {
+              const authRes = await fetch(`${ep}/xrpc/com.atproto.server.getServiceAuth?${authParams}`, {
+                headers: { Authorization: `Bearer ${accessToken}` },
+              });
+              if (authRes.ok) {
+                const data = await authRes.json();
+                if (data.token) { svcToken = data.token; break; }
+              }
+            }
+            if (!svcToken) { results[platformId] = { success: false, error: "Bluesky video auth failed" }; continue; }
 
             const upRes = await fetch(
               `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?did=${encodeURIComponent(conn.platform_user_id)}&name=${encodeURIComponent(bskyVideo.name)}`,
-              { method: "POST", headers: { Authorization: `Bearer ${svcToken}`, "Content-Type": "video/mp4" }, body: bskyVideo.buf }
+              { method: "POST", headers: { Authorization: `Bearer ${svcToken}`, "Content-Type": bskyVideo.mimeType || "video/mp4" }, body: bskyVideo.buf }
             );
             if (!upRes.ok) { results[platformId] = { success: false, error: "Bluesky video upload failed" }; continue; }
             const upData = await upRes.json();
