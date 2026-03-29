@@ -68,9 +68,9 @@ async function waitForContainer(
 ): Promise<string | null> {
   let lastStatus = "UNKNOWN";
   let apiErrors = 0;
-  // 450 iterations × 2s = 15 minutes (large videos can be very slow)
-  for (let i = 0; i < 450; i++) {
-    await new Promise((r) => setTimeout(r, 2000));
+  // 900 iterations × 1s = 15 minutes (large videos can be very slow)
+  for (let i = 0; i < 900; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
     try {
       const res = await fetch(
         `https://graph.instagram.com/v21.0/${containerId}?fields=status_code,status&access_token=${accessToken}`

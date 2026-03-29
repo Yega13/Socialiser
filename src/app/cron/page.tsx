@@ -865,8 +865,8 @@ export default async function CronPage({
 
             if (upData.jobId) {
               let videoBlob = upData.blob;
-              for (let j = 0; j < 60; j++) {
-                await new Promise((r) => setTimeout(r, 2000));
+              for (let j = 0; j < 120; j++) {
+                await new Promise((r) => setTimeout(r, 1000));
                 const sRes = await fetch(`https://video.bsky.app/xrpc/app.bsky.video.getJobStatus?jobId=${encodeURIComponent(upData.jobId)}`, { headers: { Authorization: `Bearer ${accessToken}` } });
                 if (!sRes.ok) continue;
                 const sData = await sRes.json();
