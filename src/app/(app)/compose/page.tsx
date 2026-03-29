@@ -1468,7 +1468,10 @@ export default function ComposePage() {
                     )}
                     {mediaItems.length > 1 && (
                       <p className="text-[10px] text-[#5C5C5A] mt-1">
-                        {Math.min(mediaItems.filter((m) => m.file.type.startsWith("image/")).length, 4)} of {mediaItems.filter((m) => m.file.type.startsWith("image/")).length} images (Bluesky max: 4)
+                        {hasVideo
+                          ? `1 video only (Bluesky doesn't support carousels)`
+                          : `${Math.min(mediaItems.filter((m) => m.file.type.startsWith("image/")).length, 4)} of ${mediaItems.filter((m) => m.file.type.startsWith("image/")).length} images (Bluesky max: 4)`
+                        }
                       </p>
                     )}
                   </div>

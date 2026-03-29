@@ -129,7 +129,8 @@ export async function uploadBlueskyVideo(
           return { error: job.error || "Video processing failed on Bluesky" };
         }
         if (job.progress != null) {
-          onStatus?.(`Processing video... ${Math.round(job.progress * 100)}%`);
+          const pct = job.progress > 1 ? Math.round(job.progress) : Math.round(job.progress * 100);
+          onStatus?.(`Processing video... ${pct}%`);
         }
       } catch { /* retry */ }
     }
