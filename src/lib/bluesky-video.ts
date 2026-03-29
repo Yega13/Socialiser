@@ -22,8 +22,10 @@ export async function uploadBlueskyVideo(
   onStatus?: (msg: string) => void,
 ): Promise<{ blob?: BskyBlob; error?: string }> {
   try {
-    // Step 1: Resolve user's PDS endpoint from DID document
+    // Step 1: Resolve user's PDS host from DID document
+    // The aud for getServiceAuth must be did:web:{pdsHost} — the user's PDS DID
     onStatus?.("Resolving Bluesky account...");
+    let pdsHost = "bsky.social";
     let pdsEndpoint = "https://bsky.social";
     try {
       const plcRes = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
@@ -33,38 +35,31 @@ export async function uploadBlueskyVideo(
           (s: { id: string; serviceEndpoint: string }) => s.id === "#atproto_pds"
         );
         if (pdsService?.serviceEndpoint) {
+          const url = new URL(pdsService.serviceEndpoint);
+          pdsHost = url.host;
           pdsEndpoint = pdsService.serviceEndpoint.replace(/\/$/, "");
         }
       }
     } catch { /* fallback to bsky.social */ }
 
-    // Step 2: Get service auth token from user's PDS
-    // Try PDS first, fall back to bsky.social if PDS rejects
+    // Step 2: Get service auth token — aud = user's PDS DID (not the video service)
     onStatus?.("Getting video upload authorization...");
-    let serviceToken: string | null = null;
-
-    const endpoints = [pdsEndpoint, ...(pdsEndpoint !== "https://bsky.social" ? ["https://bsky.social"] : [])];
-    for (const endpoint of endpoints) {
-      const authRes = await fetch(
-        `${endpoint}/xrpc/com.atproto.server.getServiceAuth?` +
-          new URLSearchParams({
-            aud: "did:web:video.bsky.app",
-            lxm: "app.bsky.video.uploadVideo",
-            exp: String(Math.floor(Date.now() / 1000) + 1800),
-          }),
-        { headers: { Authorization: `Bearer ${accessJwt}` } }
-      );
-      if (authRes.ok) {
-        const data = await authRes.json();
-        if (data.token) {
-          serviceToken = data.token;
-          break;
-        }
-      }
+    const authRes = await fetch(
+      `${pdsEndpoint}/xrpc/com.atproto.server.getServiceAuth?` +
+        new URLSearchParams({
+          aud: `did:web:${pdsHost}`,
+          lxm: "app.bsky.video.uploadVideo",
+          exp: String(Math.floor(Date.now() / 1000) + 1800),
+        }),
+      { headers: { Authorization: `Bearer ${accessJwt}` } }
+    );
+    if (!authRes.ok) {
+      const err = await authRes.json().catch(() => ({}));
+      return { error: `Video auth failed (${authRes.status}): ${err?.message || "unknown"}` };
     }
-
+    const { token: serviceToken } = await authRes.json();
     if (!serviceToken) {
-      return { error: "Could not get video upload authorization from Bluesky" };
+      return { error: "Video auth returned empty token" };
     }
 
     // Step 3: Upload video directly to video.bsky.app

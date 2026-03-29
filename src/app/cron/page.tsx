@@ -829,35 +829,32 @@ export default async function CronPage({
 
           // Upload video
           if (bskyVideo) {
-            // Resolve PDS endpoint — getServiceAuth must be called on user's actual PDS
+            // Resolve PDS host — aud for getServiceAuth must be did:web:{pdsHost}
+            let pdsHost = "bsky.social";
             let pdsEndpoint = "https://bsky.social";
             try {
               const plcRes = await fetch(`https://plc.directory/${encodeURIComponent(conn.platform_user_id)}`);
               if (plcRes.ok) {
                 const plcData = await plcRes.json();
                 const pdsService = plcData.service?.find((s: { id: string; serviceEndpoint: string }) => s.id === "#atproto_pds");
-                if (pdsService?.serviceEndpoint) pdsEndpoint = pdsService.serviceEndpoint.replace(/\/$/, "");
+                if (pdsService?.serviceEndpoint) {
+                  pdsHost = new URL(pdsService.serviceEndpoint).host;
+                  pdsEndpoint = pdsService.serviceEndpoint.replace(/\/$/, "");
+                }
               }
             } catch { /* fallback */ }
 
-            // Try PDS first, fall back to bsky.social
-            let svcToken: string | null = null;
-            const authParams = new URLSearchParams({
-              aud: "did:web:video.bsky.app",
-              lxm: "app.bsky.video.uploadVideo",
-              exp: String(Math.floor(Date.now() / 1000) + 1800),
-            });
-            const endpoints = [pdsEndpoint, ...(pdsEndpoint !== "https://bsky.social" ? ["https://bsky.social"] : [])];
-            for (const ep of endpoints) {
-              const authRes = await fetch(`${ep}/xrpc/com.atproto.server.getServiceAuth?${authParams}`, {
-                headers: { Authorization: `Bearer ${accessToken}` },
-              });
-              if (authRes.ok) {
-                const data = await authRes.json();
-                if (data.token) { svcToken = data.token; break; }
-              }
-            }
-            if (!svcToken) { results[platformId] = { success: false, error: "Bluesky video auth failed" }; continue; }
+            const authRes = await fetch(
+              `${pdsEndpoint}/xrpc/com.atproto.server.getServiceAuth?` + new URLSearchParams({
+                aud: `did:web:${pdsHost}`,
+                lxm: "app.bsky.video.uploadVideo",
+                exp: String(Math.floor(Date.now() / 1000) + 1800),
+              }),
+              { headers: { Authorization: `Bearer ${accessToken}` } }
+            );
+            if (!authRes.ok) { results[platformId] = { success: false, error: "Bluesky video auth failed" }; continue; }
+            const { token: svcToken } = await authRes.json();
+            if (!svcToken) { results[platformId] = { success: false, error: "Bluesky video auth empty token" }; continue; }
 
             const upRes = await fetch(
               `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?did=${encodeURIComponent(conn.platform_user_id)}&name=${encodeURIComponent(bskyVideo.name)}`,
