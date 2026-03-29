@@ -285,19 +285,33 @@ async function bskyUploadVideo(
   fileBytes: ArrayBuffer,
   fileName: string
 ): Promise<{ blob?: { $type: string; ref: { $link: string }; mimeType: string; size: number }; error?: string }> {
-  // Step 1: Get service auth token for video upload
+  // Step 1: Resolve user's PDS endpoint from DID document
+  // getServiceAuth MUST be called on the user's actual PDS, not bsky.social
+  let pdsEndpoint = "https://bsky.social";
+  try {
+    const plcRes = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
+    if (plcRes.ok) {
+      const plcData = await plcRes.json();
+      const pdsService = plcData.service?.find((s: { id: string; serviceEndpoint: string }) => s.id === "#atproto_pds");
+      if (pdsService?.serviceEndpoint) {
+        pdsEndpoint = pdsService.serviceEndpoint.replace(/\/$/, "");
+      }
+    }
+  } catch { /* fallback to bsky.social */ }
+
+  // Step 2: Get service auth token from user's PDS
   // aud = video service DID, lxm = the method we'll call on it
   const authRes = await fetch(
-    `${BSKY_API}/com.atproto.server.getServiceAuth?aud=${encodeURIComponent("did:web:video.bsky.app")}&lxm=app.bsky.video.uploadVideo&exp=${Math.floor(Date.now() / 1000) + 1800}`,
+    `${pdsEndpoint}/xrpc/com.atproto.server.getServiceAuth?aud=${encodeURIComponent("did:web:video.bsky.app")}&lxm=app.bsky.video.uploadVideo&exp=${Math.floor(Date.now() / 1000) + 1800}`,
     { headers: { Authorization: `Bearer ${accessJwt}` } }
   );
   if (!authRes.ok) {
     const authErr = await authRes.json().catch(() => ({}));
-    return { error: `Video auth failed (${authRes.status}): ${authErr?.message || "unknown"}` };
+    return { error: `Video auth failed (${authRes.status}): ${authErr?.message || "unknown"} [PDS: ${pdsEndpoint}]` };
   }
   const { token: serviceToken } = await authRes.json();
 
-  // Step 2: Upload to video service
+  // Step 3: Upload to video service
   const uploadRes = await fetch(
     `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?did=${encodeURIComponent(did)}&name=${encodeURIComponent(fileName)}`,
     {
