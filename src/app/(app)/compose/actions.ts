@@ -285,26 +285,15 @@ async function bskyUploadVideo(
   fileBytes: ArrayBuffer,
   fileName: string
 ): Promise<{ blob?: { $type: string; ref: { $link: string }; mimeType: string; size: number }; error?: string }> {
-  // Step 1: Resolve user's PDS host from DID document
-  let pdsHost = "bsky.social";
-  try {
-    const plcRes = await fetch(`https://plc.directory/${encodeURIComponent(did)}`);
-    if (plcRes.ok) {
-      const plcData = await plcRes.json();
-      const pdsService = plcData.service?.find((s: { id: string; serviceEndpoint: string }) => s.id === "#atproto_pds");
-      if (pdsService?.serviceEndpoint) {
-        pdsHost = new URL(pdsService.serviceEndpoint).host;
-      }
-    }
-  } catch { /* fallback to bsky.social */ }
-
-  // Step 2: Get service auth token for video upload
+  // Step 1: Get service auth token for video upload
+  // aud = video service DID, lxm = the method we'll call on it
   const authRes = await fetch(
-    `${BSKY_API}/com.atproto.server.getServiceAuth?aud=did:web:${pdsHost}&lxm=com.atproto.repo.uploadBlob&exp=${Math.floor(Date.now() / 1000) + 1800}`,
+    `${BSKY_API}/com.atproto.server.getServiceAuth?aud=${encodeURIComponent("did:web:video.bsky.app")}&lxm=app.bsky.video.uploadVideo&exp=${Math.floor(Date.now() / 1000) + 1800}`,
     { headers: { Authorization: `Bearer ${accessJwt}` } }
   );
   if (!authRes.ok) {
-    return { error: "Failed to get video upload auth" };
+    const authErr = await authRes.json().catch(() => ({}));
+    return { error: `Video auth failed (${authRes.status}): ${authErr?.message || "unknown"}` };
   }
   const { token: serviceToken } = await authRes.json();
 

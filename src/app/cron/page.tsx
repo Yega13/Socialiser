@@ -829,19 +829,8 @@ export default async function CronPage({
 
           // Upload video
           if (bskyVideo) {
-            // Resolve PDS host from DID
-            let pdsHost = "bsky.social";
-            try {
-              const plcRes = await fetch(`https://plc.directory/${encodeURIComponent(conn.platform_user_id)}`);
-              if (plcRes.ok) {
-                const plcData = await plcRes.json();
-                const pdsService = plcData.service?.find((s: { id: string; serviceEndpoint: string }) => s.id === "#atproto_pds");
-                if (pdsService?.serviceEndpoint) pdsHost = new URL(pdsService.serviceEndpoint).host;
-              }
-            } catch { /* fallback */ }
-
             const authRes = await fetch(
-              `${BSKY_API}/com.atproto.server.getServiceAuth?aud=did:web:${pdsHost}&lxm=com.atproto.repo.uploadBlob&exp=${Math.floor(Date.now() / 1000) + 1800}`,
+              `${BSKY_API}/com.atproto.server.getServiceAuth?aud=${encodeURIComponent("did:web:video.bsky.app")}&lxm=app.bsky.video.uploadVideo&exp=${Math.floor(Date.now() / 1000) + 1800}`,
               { headers: { Authorization: `Bearer ${accessToken}` } }
             );
             if (!authRes.ok) { results[platformId] = { success: false, error: "Bluesky video auth failed" }; continue; }
