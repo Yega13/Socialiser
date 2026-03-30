@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToBlueskyServer } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer } from "./actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
 import { moderatePost } from "@/lib/moderation";
@@ -286,6 +286,7 @@ export default function ComposePage() {
       if (selected.includes("instagram")) setPreviewTab("instagram");
       else if (selected.includes("youtube")) setPreviewTab("youtube");
       else if (selected.includes("bluesky")) setPreviewTab("bluesky");
+      else if (selected.includes("threads")) setPreviewTab("threads");
     }
   }, [selected, previewTab]);
 
@@ -296,7 +297,7 @@ export default function ComposePage() {
     mediaItems.forEach((item) => URL.revokeObjectURL(item.preview));
 
     const newItems: MediaItem[] = [];
-    const maxFiles = instagramSelected ? 10 : 1;
+    const maxFiles = instagramSelected ? 10 : selected.includes("threads") ? 20 : 1;
     const filesToAdd = Array.from(files).slice(0, maxFiles);
 
     for (const file of filesToAdd) {
@@ -360,6 +361,14 @@ export default function ComposePage() {
         } else if (platformId === "instagram") {
           const result = await refreshInstagramToken(accessToken);
           if (!result) return { error: "Instagram token expired. Reconnect in Settings." };
+          accessToken = result.access_token;
+          await supabase.from("connected_platforms").update({
+            access_token: result.access_token,
+            token_expires_at: new Date(Date.now() + result.expires_in * 1000).toISOString(),
+          }).eq("id", conn.id);
+        } else if (platformId === "threads") {
+          const result = await refreshThreadsToken(accessToken);
+          if (!result) return { error: "Threads token expired. Reconnect in Settings." };
           accessToken = result.access_token;
           await supabase.from("connected_platforms").update({
             access_token: result.access_token,
@@ -450,6 +459,61 @@ export default function ComposePage() {
             conn.platform_user_id,
             caption,
             uploadedItems
+          )];
+        }
+      }
+
+      // ── Threads ──
+      if (platformId === "threads") {
+        if (!conn.platform_user_id) return [platformId, { success: false, error: "Threads account ID missing. Reconnect." }];
+        const caption = `${title}${description ? "\n\n" + description : ""}`;
+
+        if (mediaItems.length === 0) {
+          // Text-only post
+          return [platformId, await postToThreadsServer(accessToken, conn.platform_user_id, caption)];
+        }
+
+        // Upload media to Supabase (reuse same pattern as Instagram)
+        const uploadResults = await Promise.all(
+          mediaItems.map(async (item, i) => {
+            const isVideo = item.file.type.startsWith("video/");
+            let fileToUpload: File | Blob = item.file;
+            let uploadName = item.file.name;
+
+            if (!isVideo) {
+              const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
+              fileToUpload = prepared.blob;
+              uploadName = prepared.name;
+            }
+
+            const fileName = `threads/${Date.now()}-${i}-${uploadName}`;
+            const { error: uploadError } = await supabase.storage
+              .from("media")
+              .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
+
+            if (uploadError) return { error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
+
+            const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
+            const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
+            return { url: mediaUrl, isVideo };
+          })
+        );
+
+        const firstUploadError = uploadResults.find((r) => "error" in r);
+        if (firstUploadError && "error" in firstUploadError) {
+          return [platformId, { success: false, error: firstUploadError.error }];
+        }
+
+        const uploadedItems = uploadResults as { url: string; isVideo: boolean }[];
+
+        if (uploadedItems.length === 1) {
+          return [platformId, await postToThreadsServer(
+            accessToken, conn.platform_user_id, caption, uploadedItems[0].url, uploadedItems[0].isVideo
+          )];
+        } else {
+          return [platformId, await postCarouselToThreads(
+            accessToken, conn.platform_user_id, caption, uploadedItems
           )];
         }
       }
@@ -781,7 +845,7 @@ export default function ComposePage() {
             <input
               type="file"
               accept={acceptTypes}
-              multiple={instagramSelected}
+              multiple={instagramSelected || selected.includes("threads")}
               onChange={(e) => handleFilesChange(e.target.files)}
               className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] cursor-pointer"
             />
@@ -1176,6 +1240,19 @@ export default function ComposePage() {
                     Bluesky Preview
                   </button>
                 )}
+                {selected.includes("threads") && (
+                  <button
+                    onClick={() => setPreviewTab("threads")}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-xs font-bold border border-[#0A0A0A] transition-all",
+                      previewTab === "threads"
+                        ? "bg-[#000000] text-white shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "bg-white text-[#0A0A0A] hover:bg-[#F0F0F0]"
+                    )}
+                  >
+                    Threads Preview
+                  </button>
+                )}
               </div>
             )}
 
@@ -1481,6 +1558,65 @@ export default function ComposePage() {
                   <span className="text-xs">Reply</span>
                   <span className="text-xs">Repost</span>
                   <span className="text-xs">Like</span>
+                </div>
+              </div>
+            )}
+
+            {/* ── Threads Preview ── */}
+            {(selected.length === 1 ? selected.includes("threads") : previewTab === "threads" && selected.includes("threads")) && (
+              <div className="border border-[#0A0A0A] bg-white overflow-hidden shadow-[2px_2px_0px_0px_#0A0A0A]">
+                {/* Header */}
+                <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-[#E4E4E4]">
+                  <div className="w-8 h-8 rounded-full bg-[#000000] flex items-center justify-center text-white text-xs font-black">
+                    {(connected.find((c) => c.platform === "threads")?.platform_username ?? "you")[0].toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-[#0A0A0A]">
+                      {connected.find((c) => c.platform === "threads")?.platform_username ?? "your_account"}
+                    </div>
+                    <div className="text-[10px] text-[#5C5C5A]">just now</div>
+                  </div>
+                </div>
+                {/* Text */}
+                <div className="px-3 py-2">
+                  <p className="text-[13px] text-[#0A0A0A] whitespace-pre-wrap break-words">
+                    {title}{description ? `\n\n${description}` : ""}
+                  </p>
+                  <p className="text-[10px] text-[#5C5C5A] mt-1">
+                    {(`${title}${description ? "\n\n" + description : ""}`).length}/500 characters
+                  </p>
+                </div>
+                {/* Media */}
+                {currentPreview && (
+                  <div className="px-3 pb-3">
+                    {currentPreview.file.type.startsWith("video/") ? (
+                      <video
+                        src={currentPreview.preview}
+                        className="w-full border border-[#E4E4E4] rounded-lg"
+                        style={{ aspectRatio: "16/9", objectFit: "cover" }}
+                        muted
+                      />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={currentPreview.preview}
+                        alt="Preview"
+                        className="w-full border border-[#E4E4E4] rounded-lg object-cover"
+                        style={{ aspectRatio: "1/1", objectFit: "cover", objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%` }}
+                      />
+                    )}
+                    {mediaItems.length > 1 && (
+                      <p className="text-[10px] text-[#5C5C5A] mt-1">
+                        {mediaItems.length} items — Threads supports up to 20 in a carousel
+                      </p>
+                    )}
+                  </div>
+                )}
+                {/* Actions */}
+                <div className="flex items-center gap-4 px-3 py-2 border-t border-[#E4E4E4] text-[#5C5C5A]">
+                  <span className="text-xs">♡</span>
+                  <span className="text-xs">💬</span>
+                  <span className="text-xs">↗</span>
                 </div>
               </div>
             )}

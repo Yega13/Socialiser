@@ -5,9 +5,12 @@ import { createClient } from "@/lib/supabase/client";
 import {
   refreshYouTubeToken,
   refreshInstagramToken,
+  refreshThreadsToken,
   refreshBlueskySession,
   postToInstagramServer,
   postCarouselToInstagram,
+  postToThreadsServer,
+  postCarouselToThreads,
   postToBlueskyServer,
 } from "@/app/(app)/compose/actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
@@ -169,6 +172,27 @@ export default function ScheduledPage() {
               results[platformId] = {
                 success: false,
                 error: "Token refresh failed",
+              };
+              continue;
+            }
+          } else if (platformId === "threads") {
+            setProcessingStatus("Refreshing Threads token...");
+            const refreshed = await refreshThreadsToken(accessToken);
+            if (refreshed) {
+              accessToken = refreshed.access_token;
+              await supabase
+                .from("connected_platforms")
+                .update({
+                  access_token: refreshed.access_token,
+                  token_expires_at: new Date(
+                    Date.now() + refreshed.expires_in * 1000
+                  ).toISOString(),
+                })
+                .eq("id", conn.id);
+            } else {
+              results[platformId] = {
+                success: false,
+                error: "Threads token expired. Reconnect.",
               };
               continue;
             }
@@ -344,6 +368,45 @@ export default function ScheduledPage() {
               caption,
               items
             );
+          }
+        }
+
+        // ── Threads ──
+        if (platformId === "threads") {
+          if (!conn.platform_user_id) {
+            results[platformId] = { success: false, error: "Threads account ID missing. Reconnect." };
+            continue;
+          }
+          setProcessingStatus("Posting to Threads...");
+          const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+
+          if (!post.media_urls || (post.media_urls as string[]).length === 0) {
+            // Text-only post
+            results[platformId] = await postToThreadsServer(accessToken, conn.platform_user_id, caption);
+          } else {
+            const items: { url: string; isVideo: boolean }[] = [];
+            for (let i = 0; i < (post.media_urls as string[]).length; i++) {
+              const stored = (post.media_urls as string[])[i];
+              const mimeType = (post.media_types as string[] | null)?.[i] ?? "image/jpeg";
+              const isVideo = mimeType.startsWith("video/");
+              const signedUrl = await resolveToSignedUrl(supabase, stored);
+              if (!signedUrl) {
+                results[platformId] = { success: false, error: `Failed to get URL for file ${i + 1}` };
+                break;
+              }
+              items.push({ url: signedUrl, isVideo });
+            }
+            if (!results[platformId]) {
+              if (items.length === 1) {
+                results[platformId] = await postToThreadsServer(
+                  accessToken, conn.platform_user_id, caption, items[0].url, items[0].isVideo
+                );
+              } else {
+                results[platformId] = await postCarouselToThreads(
+                  accessToken, conn.platform_user_id, caption, items
+                );
+              }
+            }
           }
         }
 

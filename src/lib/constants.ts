@@ -50,7 +50,7 @@ export const PLATFORMS = [
     icon: "@",
     color: "#000000",
     textColor: "#F9F9F7",
-    comingSoon: true,
+    comingSoon: false,
   },
   {
     id: "tiktok",

@@ -242,6 +242,199 @@ export async function postCarouselToInstagram(
   }
 }
 
+// ── Threads ──────────────────────────────────────────────────────
+
+const THREADS_API = "https://graph.threads.net/v1.0";
+
+export async function refreshThreadsToken(
+  currentToken: string
+): Promise<{ access_token: string; expires_in: number } | null> {
+  const res = await fetch(
+    `https://graph.threads.net/refresh_access_token?` +
+      new URLSearchParams({
+        grant_type: "th_refresh_token",
+        access_token: currentToken,
+      }),
+  );
+  const data = await res.json();
+  if (data.access_token) {
+    return { access_token: data.access_token, expires_in: data.expires_in ?? 5184000 };
+  }
+  return null;
+}
+
+async function createThreadsContainer(
+  accessToken: string,
+  userId: string,
+  params: Record<string, string>,
+): Promise<{ id?: string; error?: string }> {
+  const res = await fetch(
+    `${THREADS_API}/${userId}/threads`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ ...params, access_token: accessToken }),
+    }
+  );
+  const text = await res.text();
+  let data;
+  try { data = JSON.parse(text); } catch {
+    return { error: `API non-JSON (${res.status}): ${text.slice(0, 200)}` };
+  }
+  if (!data.id) {
+    const detail = data.error
+      ? `[${data.error.code}] ${data.error.message}`
+      : JSON.stringify(data);
+    return { error: `Container failed (${res.status}): ${detail}` };
+  }
+  return { id: data.id };
+}
+
+async function waitForThreadsContainer(
+  accessToken: string,
+  containerId: string,
+): Promise<string | null> {
+  let lastStatus = "UNKNOWN";
+  // 300 iterations × 1s = 5 minutes
+  for (let i = 0; i < 300; i++) {
+    await new Promise((r) => setTimeout(r, 1000));
+    try {
+      const res = await fetch(
+        `${THREADS_API}/${containerId}?fields=status&access_token=${accessToken}`
+      );
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.error) continue;
+      lastStatus = data.status || "UNKNOWN";
+      if (data.status === "FINISHED") return null;
+      if (data.status === "ERROR") return "Media processing failed on Threads";
+      if (data.status === "EXPIRED") return "Media container expired";
+    } catch { /* retry */ }
+  }
+  return `Threads processing timed out (5min). Last status: ${lastStatus}`;
+}
+
+// Single text, image, or video post
+export async function postToThreadsServer(
+  accessToken: string,
+  userId: string,
+  text: string,
+  mediaUrl?: string,
+  isVideo?: boolean,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const params: Record<string, string> = { text };
+
+    if (mediaUrl && isVideo) {
+      params.media_type = "VIDEO";
+      params.video_url = mediaUrl;
+    } else if (mediaUrl) {
+      params.media_type = "IMAGE";
+      params.image_url = mediaUrl;
+    } else {
+      params.media_type = "TEXT";
+    }
+
+    const container = await createThreadsContainer(accessToken, userId, params);
+    if (!container.id) return { success: false, error: container.error };
+
+    // Wait for container to be ready (images/videos need processing)
+    if (mediaUrl) {
+      const waitErr = await waitForThreadsContainer(accessToken, container.id);
+      if (waitErr) return { success: false, error: waitErr };
+    }
+
+    // Publish
+    const publishRes = await fetch(
+      `${THREADS_API}/${userId}/threads_publish`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ creation_id: container.id, access_token: accessToken }),
+      }
+    );
+    const publishData = await publishRes.json();
+
+    if (!publishData.id) {
+      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Carousel post (2-20 items, images and/or videos)
+export async function postCarouselToThreads(
+  accessToken: string,
+  userId: string,
+  text: string,
+  items: { url: string; isVideo: boolean }[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    if (items.length < 2 || items.length > 20) {
+      return { success: false, error: "Threads carousel requires 2-20 items" };
+    }
+
+    // Step 1: Create child containers in parallel
+    const containerResults = await Promise.all(
+      items.map(async (item, i) => {
+        const params: Record<string, string> = { is_carousel_item: "true" };
+        if (item.isVideo) {
+          params.media_type = "VIDEO";
+          params.video_url = item.url;
+        } else {
+          params.media_type = "IMAGE";
+          params.image_url = item.url;
+        }
+        const container = await createThreadsContainer(accessToken, userId, params);
+        return { id: container.id, error: container.error, index: i };
+      })
+    );
+    const firstContainerError = containerResults.find((c) => !c.id);
+    if (firstContainerError) return { success: false, error: `Item ${firstContainerError.index + 1}: ${firstContainerError.error}` };
+    const containers = containerResults as { id: string; index: number }[];
+
+    // Step 2: Wait for all containers in parallel
+    const waitResults = await Promise.all(
+      containers.map(async (c) => ({
+        index: c.index,
+        error: await waitForThreadsContainer(accessToken, c.id),
+      }))
+    );
+    const firstFailure = waitResults.find((r) => r.error);
+    if (firstFailure) {
+      return { success: false, error: `Item ${firstFailure.index + 1}: ${firstFailure.error}` };
+    }
+
+    // Step 3: Create carousel container
+    const carouselContainer = await createThreadsContainer(accessToken, userId, {
+      media_type: "CAROUSEL",
+      children: containers.map((c) => c.id).join(","),
+      text,
+    });
+    if (!carouselContainer.id) return { success: false, error: carouselContainer.error };
+
+    // Step 4: Publish
+    const publishRes = await fetch(
+      `${THREADS_API}/${userId}/threads_publish`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ creation_id: carouselContainer.id, access_token: accessToken }),
+      }
+    );
+    const publishData = await publishRes.json();
+
+    if (!publishData.id) {
+      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ── Bluesky (AT Protocol) ────────────────────────────────────────
 
 const BSKY_API = "https://bsky.social/xrpc";

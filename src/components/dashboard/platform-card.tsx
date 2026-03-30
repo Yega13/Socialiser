@@ -138,6 +138,20 @@ export function PlatformCard({
         state: user.id,
       });
       window.location.href = `https://api.instagram.com/oauth/authorize?${params}`;
+    } else if (platform.id === "threads") {
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { window.location.href = "/login"; return; }
+
+      const params = new URLSearchParams({
+        client_id: process.env.NEXT_PUBLIC_THREADS_APP_ID || "",
+        redirect_uri: `${window.location.origin}/threads-callback`,
+        response_type: "code",
+        scope: "threads_basic,threads_content_publish",
+        state: user.id,
+      });
+      window.location.href = `https://threads.net/oauth/authorize?${params}`;
     } else if (platform.id === "bluesky") {
       setShowBlueskyForm(true);
       setBskyError("");
