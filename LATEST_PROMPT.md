@@ -1,4 +1,4 @@
-# Socialiser — Session Handoff (2026-03-29)
+# Socialiser — Session Handoff (2026-03-30)
 
 Read this ENTIRE file before doing anything. It contains full context from the previous session.
 
@@ -8,6 +8,12 @@ Read this ENTIRE file before doing anything. It contains full context from the p
 
 **Rule #1 — NEVER overwrite files. Only edit.**
 Use Edit to make targeted changes: delete bad code, insert correct code. Never use Write on an existing file. If a file needs a complete architectural change, make it section by section using Edit, not a full replacement. This preserves git history and prevents accidental loss of working code.
+
+**Rule #2 — Analyze EVERYTHING before advising.**
+Do not rush recommendations. Think through the full picture before each suggestion. Review your own prior suggestions before giving new ones to avoid contradictions. If unsure, say so rather than giving confident but wrong advice.
+
+**Rule #3 — Deploying is done through Antigravity sidebar GUI.**
+The user deploys via the Antigravity sidebar GUI, not via CLI commands. Do not tell the user to run `npx opennextjs-cloudflare deploy` — just tell them to deploy through Antigravity. Build commands (`npx opennextjs-cloudflare build`) can still be run in terminal.
 
 ---
 
@@ -31,6 +37,7 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - **YouTube**: Connect (OAuth), disconnect, video upload with custom thumbnails — all working
 - **Instagram**: Connect (OAuth), disconnect, post images, carousels (2-10 items), reels, video posts, and stories — all working
 - **Bluesky**: Connect (handle + app password), disconnect, post text/images/video — all working
+- **Threads**: Code complete (OAuth connect, post text/images/video/carousels up to 20 items, scheduling, cron). Blocked by Meta Developer Console bug — callback URL won't save. Pending testing.
 - **Post type selection**: When uploading to Instagram, user picks post type via neo-brutalist chips:
   - Single image → Feed Post or Story
   - Single video → Video Post, Reel, or Story
@@ -41,15 +48,15 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - **Image processing**: Aspect ratio cropping with drag-to-reposition, padding, quality slider, brightness/contrast/saturation filters
 - **Parallel posting**: All platforms post simultaneously, Supabase uploads in parallel, IG containers created in parallel
 - **Legal pages**: Privacy Policy (/privacy), Terms of Service (/tos), Content Policy (/content-policy) — all live
-- **18 routes build cleanly**
+- **19 routes build cleanly**
 
 ## Platforms in Constants (src/lib/constants.ts)
 - YouTube — LIVE, working
 - Instagram — LIVE, working
 - Bluesky — LIVE, working (connect, post text/images/video, scheduling)
+- Threads — CODE COMPLETE, blocked by Meta console bug (callback URL won't save)
 - X/Twitter — coming soon
 - LinkedIn — coming soon
-- Threads — coming soon
 - TikTok — coming soon
 - Facebook — coming soon (blocked by Meta business verification)
 - VK — coming soon
@@ -93,7 +100,64 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 
 ---
 
-## What Was Built This Session (2026-03-28 → 2026-03-29)
+## What Was Built This Session (2026-03-30)
+
+### Threads Integration (Full — code complete, pending Meta fix)
+**New files:**
+- `src/app/(app)/threads-callback/page.tsx` — OAuth callback page
+- `src/app/(app)/threads-callback/actions.ts` — Token exchange (short → long-lived, 60 days)
+
+**Modified files:**
+- `src/lib/constants.ts` — Threads `comingSoon: false`
+- `src/components/dashboard/platform-card.tsx` — Threads OAuth redirect (`threads.net/oauth/authorize`)
+- `src/app/(app)/compose/actions.ts` — `refreshThreadsToken`, `postToThreadsServer`, `postCarouselToThreads` (parallel container creation)
+- `src/app/(app)/compose/page.tsx` — Threads posting logic, preview tab + preview panel, multi-file (up to 20)
+- `src/app/(app)/scheduled/page.tsx` — Threads token refresh + posting (text, single media, carousel)
+- `src/app/cron/page.tsx` — Threads token refresh + full publishing engine (text, image, video, carousel)
+
+**Threads API details:**
+- OAuth: `https://threads.net/oauth/authorize` with scopes `threads_basic,threads_content_publish`
+- Token exchange: `https://graph.threads.net/oauth/access_token`
+- Long-lived token: `https://graph.threads.net/access_token` (grant_type=th_exchange_token)
+- Token refresh: `https://graph.threads.net/refresh_access_token` (grant_type=th_refresh_token)
+- Profile: `https://graph.threads.net/v1.0/me?fields=id,username`
+- Create container: `POST https://graph.threads.net/v1.0/{user_id}/threads`
+- Publish: `POST https://graph.threads.net/v1.0/{user_id}/threads_publish`
+- Status: `GET https://graph.threads.net/v1.0/{container_id}?fields=status`
+- Supports: TEXT, IMAGE, VIDEO, CAROUSEL (up to 20 items)
+- 500 character limit
+
+**Env vars:**
+```
+NEXT_PUBLIC_THREADS_APP_ID=853019483864231
+THREADS_APP_ID=853019483864231
+THREADS_APP_SECRET=25cfa622bf3658c8a65c788a47fc81f6
+```
+
+**Blocked by:** Meta Developer Console bug — "Callback URL Authorization" field won't persist. Their own frontend crashes with `error_code: 1`. Tried incognito, different browsers, clearing cookies — all same result. Code is ready, just can't test OAuth flow.
+
+### Poll Interval Optimization
+Reduced all poll intervals from 2000ms to 1000ms for faster completion detection:
+- `src/app/(app)/compose/actions.ts` — Instagram container polling (900 iterations × 1s = 15min)
+- `src/lib/bluesky-video.ts` — Bluesky video processing polling (90 × 1s)
+- `src/app/cron/page.tsx` — Cron video processing polling (120 × 1s)
+
+### AI Features Planned (build tomorrow)
+- **Enhance Caption** — AI rewrites caption to be more engaging
+- **Suggest Hashtags** — AI generates relevant hashtags
+- Provider-agnostic: supports both OpenAI (GPT-4o-mini) and Anthropic (Claude Haiku)
+- No SDK needed — plain fetch() calls, auto-detects which API key is set
+- Cost: ~$0.0002/use for text, negligible at any scale
+- UI: toolbar row between Description and Media Upload in compose page
+- Plan file: `.claude/plans/sharded-tumbling-hammock.md`
+- Blocked by: user needs to purchase API key ($5 minimum)
+
+### Deploy Issue
+Cloudflare Workers deploy crashes with miniflare `ERR_RUNTIME_FAILURE` (access violation) on Windows. Known Windows compatibility issue. Build succeeds, only deploy step fails. Workaround: restart PC and retry, or deploy from different machine.
+
+---
+
+## What Was Built Previous Session (2026-03-28 → 2026-03-29)
 
 ### Bluesky Integration (Full)
 **Files:** `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/components/dashboard/platform-card.tsx`, `src/app/(app)/scheduled/page.tsx`, `src/app/cron/page.tsx`
@@ -333,33 +397,38 @@ This column ALREADY EXISTS in the live database. Don't try to add it again.
 
 ## What To Do Next (Priority Order)
 
-### 1. Run the DB migration (Critical — do before deploying)
-The migration SQL is in the "Scheduling: FIXED" section above. Run it in Supabase Dashboard → SQL Editor.
+### 1. Fix Cloudflare Deploy
+Miniflare crashes on Windows. Try restarting PC and redeploying: `npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy`
 
-### 2. Landing Page Improvements
-- Add FAQ section (SEO + user trust)
-- Add engaging images/illustrations
-- Add proper metatags and SEO optimization
-- Keep it simple — don't repeat Metricool's wall-of-text mistake
+### 2. AI Features (next session)
+- Buy OpenAI or Anthropic API key ($5)
+- Build Enhance Caption + Suggest Hashtags
+- Plan is ready at `.claude/plans/sharded-tumbling-hammock.md`
 
-### 3. Google OAuth Verification (for YouTube)
+### 3. Threads — Fix Meta Callback URL
+Meta Developer Console has a bug preventing callback URL from saving. Keep trying or wait for Meta to fix their console. Code is 100% ready.
+
+### 4. X/Twitter Integration
+Next major platform to add. Twitter API v2 free tier supports posting.
+
+### 5. Google OAuth Verification (for YouTube)
 - Add your Gmail as test user in Google Cloud Console → OAuth consent screen → Test users
 - Record 2-min demo video: connect YouTube → upload → confirm live
 - Submit for verification (takes 1–4 weeks)
+- Needs custom domain first (user buying in ~3 days)
 
-### 4. Landing Page Improvements
+### 6. Landing Page Improvements
 - Add FAQ section (SEO + user trust)
 - Add engaging images/illustrations
 - Add proper metatags and SEO optimization
 
-### 5. Phase 2 Features (after scheduling is fixed)
+### 7. Phase 2 Features
+- AI analytics (suggest when/what/where to post based on user's engagement data)
 - Media library (upload once, reuse anywhere)
 - Post preview by platform (phone mockups)
 - IG first comment scheduling
-- Smart image auto-resize per platform
-- Emoji picker in text editor
 - Character counter per platform
-- Analytics dashboard (better than Publer's from day one)
+- Analytics dashboard
 
 ---
 
@@ -386,8 +455,10 @@ The migration SQL is in the "Scheduling: FIXED" section above. Run it in Supabas
 
 ---
 
-## Git Status (end of session 2026-03-29)
+## Git Status (end of session 2026-03-30)
 - Branch: master
-- Modified: `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/app/(app)/scheduled/page.tsx`, `src/app/cron/page.tsx`, `src/components/dashboard/platform-card.tsx`, `src/lib/constants.ts`, `src/app/layout.tsx`, `LATEST_PROMPT.md`
-- New files: `src/components/ui/back-to-top.tsx`
+- Modified: `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/app/(app)/scheduled/page.tsx`, `src/app/cron/page.tsx`, `src/components/dashboard/platform-card.tsx`, `src/lib/constants.ts`, `src/lib/bluesky-video.ts`, `.env.local`, `LATEST_PROMPT.md`
+- New files: `src/app/(app)/threads-callback/page.tsx`, `src/app/(app)/threads-callback/actions.ts`
+- 19 routes build cleanly
 - Changes are NOT committed yet — user hasn't asked for a commit
+- Deploy blocked by miniflare Windows crash
