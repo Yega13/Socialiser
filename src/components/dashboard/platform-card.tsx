@@ -145,7 +145,7 @@ export function PlatformCard({
       if (!user) { window.location.href = "/login"; return; }
 
       const params = new URLSearchParams({
-        client_id: "1404345784799231",
+        client_id: "853019483864231",
         redirect_uri: `${window.location.origin}/threads-callback`,
         response_type: "code",
         scope: "threads_basic,threads_content_publish",
