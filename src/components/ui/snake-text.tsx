@@ -91,7 +91,7 @@ const SnakeLoop: FC = () => {
         onPointerLeave={endDrag}
       >
         <svg
-          className="select-none w-full overflow-visible block text-[6rem] font-bold uppercase leading-none"
+          className="select-none w-full overflow-visible block text-[3rem] font-bold uppercase leading-none"
           viewBox="0 0 1440 400"
           preserveAspectRatio="xMidYMid meet"
         >

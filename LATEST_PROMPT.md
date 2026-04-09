@@ -100,7 +100,35 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 
 ---
 
-## What Was Built This Session (2026-03-30)
+## What Was Built This Session (2026-04-09)
+
+### ReactBits Animations (from reactbits.dev)
+**New files:**
+- `src/components/ui/click-spark.tsx` — ClickSpark component (sparks on every click)
+- `src/components/ui/spark-wrapper.tsx` — Client wrapper for ClickSpark, theme-aware (black sparks light mode, white dark mode)
+- `src/components/ui/curved-loop.tsx` — CurvedLoop base component (text on curved SVG path)
+- `src/components/ui/snake-text.tsx` — S-curve snake marquee ("Socializer Socializer Socializer" on continuous snake path, ±250 curve, speed 0.3, draggable)
+
+**Modified files:**
+- `src/app/layout.tsx` — wrapped body content in SparkWrapper (click sparks site-wide)
+- `src/app/(marketing)/layout.tsx` — added SnakeText before Footer, added dark mode bg class
+
+**Details:**
+- ClickSpark: canvas-based, renders spark lines radiating from click point, z-index 9999, pointer-events none
+- SnakeText: single SVG with S-curve path (`M-100,200 Q360,450 720,200 Q1080,-50 1540,200`), text scrolls along path, interactive drag support
+- Both components are theme-aware using MutationObserver on `html.dark` class
+
+### Threads Meta Console Setup (2026-04-09)
+- Created new Meta app "Socializer Threads" (Main ID: 1404345784799231, Threads ID: 853019483864231)
+- All settings configured (basic, permissions, callback URLs, tester)
+- BLOCKED by Meta console bug: redirect URI saves visually but doesn't register in OAuth system (error 1349168)
+- Created second app "Socializer Threads v2" (ID: 1492646805606968) with Facebook Login product — but Threads API can't be added to non-Threads apps
+- v2 app can be deleted — useless without Threads API
+- See BLOCKER section above for full details
+
+---
+
+## What Was Built Previous Session (2026-03-30)
 
 ### Threads Integration (Full — code complete, pending Meta fix)
 **New files:**
