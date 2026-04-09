@@ -11,8 +11,8 @@ const SnakeLoop: FC = () => {
   const uid = useId();
   const pathId = `snake-${uid}`;
 
-  // S-curve: left side curves down (+250), right side curves up (-250)
-  const pathD = "M-100,200 Q360,450 720,200 Q1080,-50 1540,200";
+  // S-curve: left side curves down (+200), right side curves up (-200)
+  const pathD = "M-100,200 Q360,400 720,200 Q1080,0 1540,200";
 
   const dragRef = useRef(false);
   const lastXRef = useRef(0);

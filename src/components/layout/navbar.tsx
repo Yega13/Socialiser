@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { ProfileDropdown } from "@/components/layout/profile-dropdown";
@@ -31,8 +32,15 @@ export async function Navbar() {
           {user && <BackButton />}
           <Link
             href="/"
-            className="font-black text-lg tracking-tight hover:text-[var(--color-brand-violet)] transition-colors"
+            className="flex items-center gap-2 font-black text-lg tracking-tight hover:text-[var(--color-brand-violet)] transition-colors"
           >
+            <Image
+              src="/socializer-logo.jpg"
+              alt="Socializer logo"
+              width={28}
+              height={28}
+              className="mix-blend-multiply dark:mix-blend-screen"
+            />
             {SITE_CONFIG.name}
           </Link>
         </div>
