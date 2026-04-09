@@ -127,14 +127,35 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 - Supports: TEXT, IMAGE, VIDEO, CAROUSEL (up to 20 items)
 - 500 character limit
 
-**Env vars:**
+**Env vars (STALE — must be updated with new app credentials):**
 ```
-NEXT_PUBLIC_THREADS_APP_ID=853019483864231
-THREADS_APP_ID=853019483864231
-THREADS_APP_SECRET=25cfa622bf3658c8a65c788a47fc81f6
+NEXT_PUBLIC_THREADS_APP_ID=<NEW_APP_ID>
+THREADS_APP_ID=<NEW_APP_ID>
+THREADS_APP_SECRET=<NEW_APP_SECRET>
 ```
 
-**Blocked by:** Meta Developer Console bug — "Callback URL Authorization" field won't persist. Their own frontend crashes with `error_code: 1`. Tried incognito, different browsers, clearing cookies — all same result. Code is ready, just can't test OAuth flow.
+**STATUS (2026-04-01):** Old Meta apps deleted (1404345784799231, 1351148110372283). User is creating a NEW app. Follow the steps below.
+
+**IMMEDIATE TODO — Threads App Setup (do this FIRST before any code):**
+
+1. User has already deleted the old apps and is creating a new one at https://developers.facebook.com/apps/create/
+2. On the FIRST screen, select the use case **"Access the Threads API"** (NOT a generic use case)
+3. App type: **Consumer**
+4. Name: "Socializer" or similar, email: yeganyansuren13@gmail.com
+5. After creation, go to **Use Cases → Access the Threads API → Customize/Modify → Settings**
+6. Set **Redirect Callback URL**: `https://socialiser.yeganyansuren13.workers.dev/threads-callback`
+   - IMPORTANT: When typing the URL, a **dropdown popup** appears — you MUST click on it to select it, just typing and saving does NOT work (known Meta UI bug)
+   - Fill ALL THREE callback fields (redirect, deauthorize, delete) — form won't save if any are empty
+7. Go to **App Roles** → add `yeggan.yan` as a **Threads Tester** (requires a Facebook Developer Account linked to that Instagram)
+8. The tester must **accept the invitation** in the Threads app on their phone
+9. Get the new **App ID** and **App Secret** from App Settings → Basic
+
+**THEN update the code:**
+1. Update `.env.local` with the new THREADS_APP_ID, THREADS_APP_SECRET, and NEXT_PUBLIC_THREADS_APP_ID
+2. Update the hardcoded app ID in `src/components/dashboard/platform-card.tsx` line ~148: `client_id: "NEW_APP_ID_HERE"`
+3. Update the hardcoded app ID in `src/app/(app)/threads-callback/actions.ts` if it references the old ID
+4. Deploy through **Antigravity sidebar GUI** (NOT via CLI — miniflare crashes on Windows)
+5. Test the OAuth flow: Dashboard → Connect Threads → should redirect to threads.net → authorize → callback page saves tokens
 
 ### Poll Interval Optimization
 Reduced all poll intervals from 2000ms to 1000ms for faster completion detection:
@@ -405,8 +426,8 @@ Miniflare crashes on Windows. Try restarting PC and redeploying: `npx opennextjs
 - Build Enhance Caption + Suggest Hashtags
 - Plan is ready at `.claude/plans/sharded-tumbling-hammock.md`
 
-### 3. Threads — Fix Meta Callback URL
-Meta Developer Console has a bug preventing callback URL from saving. Keep trying or wait for Meta to fix their console. Code is 100% ready.
+### 3. Threads — Complete Setup with New App
+Old Meta apps were deleted. User is creating a new app with "Access the Threads API" use case. See the **IMMEDIATE TODO** section above for exact steps. Code is 100% ready — just needs new App ID + Secret in `.env.local` and hardcoded in `platform-card.tsx`.
 
 ### 4. X/Twitter Integration
 Next major platform to add. Twitter API v2 free tier supports posting.
