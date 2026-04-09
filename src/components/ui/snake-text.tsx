@@ -3,7 +3,7 @@
 import { useRef, useEffect, useState, useMemo, useId, FC, PointerEvent } from "react";
 
 const SnakeLoop: FC = () => {
-  const text = "Socializer\u00A0";
+  const text = "Socializer Socializer Socializer\u00A0";
   const measureRef = useRef<SVGTextElement | null>(null);
   const textPathRef = useRef<SVGTextPathElement | null>(null);
   const [spacing, setSpacing] = useState(0);
@@ -11,8 +11,8 @@ const SnakeLoop: FC = () => {
   const uid = useId();
   const pathId = `snake-${uid}`;
 
-  // S-curve: left side curves down (+400), right side curves up (-400)
-  const pathD = "M-100,200 Q360,600 720,200 Q1080,-200 1540,200";
+  // S-curve: left side curves down (+250), right side curves up (-250)
+  const pathD = "M-100,200 Q360,450 720,200 Q1080,-50 1540,200";
 
   const dragRef = useRef(false);
   const lastXRef = useRef(0);
