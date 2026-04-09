@@ -127,35 +127,55 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 - Supports: TEXT, IMAGE, VIDEO, CAROUSEL (up to 20 items)
 - 500 character limit
 
-**Env vars (STALE — must be updated with new app credentials):**
+**Env vars (CONFIRMED CORRECT in .env.local):**
 ```
-NEXT_PUBLIC_THREADS_APP_ID=<NEW_APP_ID>
-THREADS_APP_ID=<NEW_APP_ID>
-THREADS_APP_SECRET=<NEW_APP_SECRET>
+NEXT_PUBLIC_THREADS_APP_ID=853019483864231
+THREADS_APP_ID=853019483864231
+THREADS_APP_SECRET=25cfa622bf3658c8a65c788a47fc81f6
 ```
 
-**STATUS (2026-04-01):** Old Meta apps deleted (1404345784799231, 1351148110372283). User is creating a NEW app. Follow the steps below.
+**STATUS (2026-04-09):** New Meta app fully configured in console!
+- **App Name:** Socializer Threads
+- **Main App ID:** 1404345784799231
+- **Threads App ID:** 853019483864231 (USE THIS ONE for OAuth — different from main app ID!)
+- **App Mode:** Development (not live — correct for testing)
+- **Basic Settings:** DONE — privacy policy URL (/privacy), ToS URL (/tos), contact email, app domains
+- **Permissions:** DONE — `threads_basic` + `threads_content_publish` both "Ready for testing"
+- **Callback URLs:** DONE — all 3 set to `https://socialiser.yeganyansuren13.workers.dev/threads-callback`
+  - URL обратного вызова для перенаправления (OAuth redirect)
+  - URL обратного вызова для удаления приложения (Deauthorize)
+  - URL обратного звонка для удаления (Data deletion)
+- **Threads Tester:** DONE — `Socializers_official` added and accepted
+- **.env.local:** DONE — already had correct Threads App ID + Secret
+- **Code (platform-card.tsx):** DONE — already had correct client_id `853019483864231`
+- **Code (threads-callback/actions.ts):** DONE — reads from env vars
 
-**IMMEDIATE TODO — Threads App Setup (do this FIRST before any code):**
+**BLOCKER: OAuth redirect URI not registered (error 1349168)**
+- threads.com 500s in normal browser (works in incognito — likely cookie/cache issue, NOT geo-block; Armenia is fine)
+- In incognito, OAuth first returned error 4476001 ("No redirect in URI"), then after re-saving with dropdown click returned error 1349168
+- Error 1349168: "URL заблокирован: конечный URI не внесен в список разрешенных URI в разделе 'Клиентские настройки OAuth'"
+- Translation: "URL Blocked: redirect URI not whitelisted in Client OAuth Settings"
+- The 3 callback URL fields in Threads use case settings appear saved but Meta doesn't register them as valid OAuth redirect URIs
+- "Facebook Login" product (which has the "Valid OAuth Redirect URIs" field) cannot be added to Threads-only apps
+- Created second app "Socializer Threads v2" (ID: 1492646805606968) as Consumer type — has Facebook Login product BUT Threads API cannot be added as a product (only available via use case at app creation)
+- Attempted workarounds that FAILED:
+  1. Adding Facebook Login product to Threads-only app → /fb-login/settings/ redirects to /dashboard
+  2. Adding Threads API product to Consumer app with Facebook Login → not available in product list
+  3. Graph API Explorer query on Threads App ID → "Unknown path components"
+- **The v2 app (1492646805606968) can be deleted** — it's useless without Threads API
+- Root cause: Meta's Threads-only app type doesn't expose Facebook Login "Client OAuth Settings" but their OAuth system checks that registry
 
-1. User has already deleted the old apps and is creating a new one at https://developers.facebook.com/apps/create/
-2. On the FIRST screen, select the use case **"Access the Threads API"** (NOT a generic use case)
-3. App type: **Consumer**
-4. Name: "Socializer" or similar, email: yeganyansuren13@gmail.com
-5. After creation, go to **Use Cases → Access the Threads API → Customize/Modify → Settings**
-6. Set **Redirect Callback URL**: `https://socialiser.yeganyansuren13.workers.dev/threads-callback`
-   - IMPORTANT: When typing the URL, a **dropdown popup** appears — you MUST click on it to select it, just typing and saving does NOT work (known Meta UI bug)
-   - Fill ALL THREE callback fields (redirect, deauthorize, delete) — form won't save if any are empty
-7. Go to **App Roles** → add `yeggan.yan` as a **Threads Tester** (requires a Facebook Developer Account linked to that Instagram)
-8. The tester must **accept the invitation** in the Threads app on their phone
-9. Get the new **App ID** and **App Secret** from App Settings → Basic
+**NEXT STEPS TO TRY:**
+1. Wait 30+ minutes for Meta propagation on the original app and retry
+2. Try different browser entirely (Firefox/Edge) for the OAuth flow
+3. Report bug to Meta Developer Community forums
+4. Check if creating a "Business" type app (instead of Consumer) with Threads use case exposes Facebook Login
 
-**THEN update the code:**
-1. Update `.env.local` with the new THREADS_APP_ID, THREADS_APP_SECRET, and NEXT_PUBLIC_THREADS_APP_ID
-2. Update the hardcoded app ID in `src/components/dashboard/platform-card.tsx` line ~148: `client_id: "NEW_APP_ID_HERE"`
-3. Update the hardcoded app ID in `src/app/(app)/threads-callback/actions.ts` if it references the old ID
-4. Deploy through **Antigravity sidebar GUI** (NOT via CLI — miniflare crashes on Windows)
-5. Test the OAuth flow: Dashboard → Connect Threads → should redirect to threads.net → authorize → callback page saves tokens
+**Code is ready — no changes needed. Blocked purely by Meta console bug.**
+- `.env.local` — correct (Threads App ID: 853019483864231, secret set)
+- `platform-card.tsx` line 148 — correct (`client_id: "853019483864231"`)
+- `threads-callback/actions.ts` — correct (reads from env vars)
+- Deploy through **Antigravity sidebar GUI** once Meta issue is resolved
 
 ### Poll Interval Optimization
 Reduced all poll intervals from 2000ms to 1000ms for faster completion detection:
