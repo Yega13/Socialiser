@@ -71,46 +71,58 @@ export async function uploadBlueskyVideo(
       return { error: "Video auth returned empty token" };
     }
 
-    // Step 3: Upload video directly to video.bsky.app (2 min timeout for upload)
+    // Step 3: Upload video via XMLHttpRequest (real-time progress, 3 min timeout)
     const sizeMB = videoFile.size / 1024 / 1024;
-    onStatus?.(`Uploading video to Bluesky (${sizeMB.toFixed(1)} MB)...`);
+    if (videoFile.size === 0) return { error: "Video file is empty (0 bytes)" };
+    onStatus?.(`Uploading video to Bluesky (0/${sizeMB.toFixed(1)} MB)...`);
     const mimeType = videoFile instanceof File ? videoFile.type : "video/mp4";
-    const uploadRes = await fetch(
-      `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?` +
-        new URLSearchParams({ did, name: fileName }),
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${serviceToken}`,
-          "Content-Type": mimeType || "video/mp4",
-        },
-        body: videoFile,
-        signal: abort.signal,
-      }
-    );
-    if (!uploadRes.ok) {
-      const errText = await uploadRes.text().catch(() => "");
-      let detail = `(${uploadRes.status})`;
-      try {
-        const errJson = JSON.parse(errText);
-        // Bluesky wraps errors in jobStatus sometimes
-        const msg = errJson?.jobStatus?.error || errJson?.message || errJson?.error;
-        if (msg) detail = msg;
-        else detail = errText.slice(0, 200);
-      } catch {
-        detail = errText.slice(0, 200) || `(${uploadRes.status})`;
-      }
-      return { error: `Video upload failed: ${detail}` };
-    }
-    const uploadData = await uploadRes.json();
+    const uploadUrl = `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?${new URLSearchParams({ did, name: fileName })}`;
 
-    // Step 4: Poll for processing completion (max 3 min)
-    const jobId = uploadData.jobId;
-    if (!jobId) return { blob: uploadData.blob };
+    const uploadData = await new Promise<Record<string, unknown>>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", uploadUrl);
+      xhr.setRequestHeader("Authorization", `Bearer ${serviceToken}`);
+      xhr.setRequestHeader("Content-Type", mimeType || "video/mp4");
+      xhr.timeout = 180000;
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable) {
+          const pct = Math.round((e.loaded / e.total) * 100);
+          const loadedMB = (e.loaded / 1024 / 1024).toFixed(1);
+          onStatus?.(`Uploading video... ${loadedMB}/${sizeMB.toFixed(1)} MB (${pct}%)`);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try { resolve(JSON.parse(xhr.responseText)); }
+          catch { reject(new Error(`Invalid JSON response: ${xhr.responseText.slice(0, 200)}`)); }
+        } else {
+          let detail = `(${xhr.status})`;
+          try {
+            const errJson = JSON.parse(xhr.responseText);
+            detail = errJson?.jobStatus?.error || errJson?.message || errJson?.error || xhr.responseText.slice(0, 200);
+          } catch { detail = xhr.responseText.slice(0, 200) || `(${xhr.status})`; }
+          reject(new Error(`Video upload failed: ${detail}`));
+        }
+      };
+      xhr.onerror = () => reject(new Error("Video upload network error"));
+      xhr.ontimeout = () => reject(new Error("Video upload timed out (3 min)"));
+
+      const onAbort = () => xhr.abort();
+      abort.signal.addEventListener("abort", onAbort, { once: true });
+      xhr.onloadend = () => abort.signal.removeEventListener("abort", onAbort);
+
+      xhr.send(videoFile);
+    });
+
+    // Step 4: Poll for processing completion (max 3 min, 2s interval)
+    const jobId = uploadData.jobId as string | undefined;
+    if (!jobId) return { blob: uploadData.blob as BskyBlob };
 
     onStatus?.("Processing video on Bluesky...");
     for (let i = 0; i < 90; i++) {
-      await new Promise((r) => setTimeout(r, 1000));
+      await new Promise((r) => setTimeout(r, 2000));
       if (abort.signal.aborted) return { error: "Video upload timed out" };
       try {
         const statusRes = await fetch(
@@ -123,7 +135,7 @@ export async function uploadBlueskyVideo(
         if (!job) continue;
 
         if (job.state === "JOB_STATE_COMPLETED") {
-          return { blob: job.blob };
+          return { blob: job.blob as BskyBlob };
         }
         if (job.state === "JOB_STATE_FAILED") {
           return { error: job.error || "Video processing failed on Bluesky" };
