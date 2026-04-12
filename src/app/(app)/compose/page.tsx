@@ -513,53 +513,60 @@ export default function ComposePage() {
         if (!conn.platform_user_id) return [platformId, { success: false, error: "Threads account ID missing. Reconnect." }];
         const caption = `${title}${description ? "\n\n" + description : ""}`;
 
-        if (mediaItems.length === 0) {
-          // Text-only post
-          return [platformId, await postToThreadsServer(accessToken, conn.platform_user_id, caption)];
-        }
+        try {
+          if (mediaItems.length === 0) {
+            // Text-only post
+            const r = await postToThreadsServer(accessToken, conn.platform_user_id, caption);
+            return [platformId, { ...r, error: r.error ? `[text] ${r.error}` : undefined }];
+          }
 
-        // Upload media to Supabase (reuse same pattern as Instagram)
-        const uploadResults = await Promise.all(
-          mediaItems.map(async (item, i) => {
-            const isVideo = item.file.type.startsWith("video/");
-            let fileToUpload: File | Blob = item.file;
-            let uploadName = item.file.name;
+          // Upload media to Supabase (reuse same pattern as Instagram)
+          const uploadResults = await Promise.all(
+            mediaItems.map(async (item, i) => {
+              const isVideo = item.file.type.startsWith("video/");
+              let fileToUpload: File | Blob = item.file;
+              let uploadName = item.file.name;
 
-            if (!isVideo) {
-              const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
-              fileToUpload = prepared.blob;
-              uploadName = prepared.name;
-            }
+              if (!isVideo) {
+                const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+                const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
+                fileToUpload = prepared.blob;
+                uploadName = prepared.name;
+              }
 
-            const fileName = `threads/${Date.now()}-${i}-${uploadName}`;
-            const { error: uploadError } = await supabase.storage
-              .from("media")
-              .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
+              const fileName = `threads/${Date.now()}-${i}-${uploadName}`;
+              const { error: uploadError } = await supabase.storage
+                .from("media")
+                .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
 
-            if (uploadError) return { error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
+              if (uploadError) return { error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
 
-            const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
-            const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
-            return { url: mediaUrl, isVideo };
-          })
-        );
+              const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
+              const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
+              return { url: mediaUrl, isVideo };
+            })
+          );
 
-        const firstUploadError = uploadResults.find((r) => "error" in r);
-        if (firstUploadError && "error" in firstUploadError) {
-          return [platformId, { success: false, error: firstUploadError.error }];
-        }
+          const firstUploadError = uploadResults.find((r) => "error" in r);
+          if (firstUploadError && "error" in firstUploadError) {
+            return [platformId, { success: false, error: `[upload] ${firstUploadError.error}` }];
+          }
 
-        const uploadedItems = uploadResults as { url: string; isVideo: boolean }[];
+          const uploadedItems = uploadResults as { url: string; isVideo: boolean }[];
 
-        if (uploadedItems.length === 1) {
-          return [platformId, await postToThreadsServer(
-            accessToken, conn.platform_user_id, caption, uploadedItems[0].url, uploadedItems[0].isVideo
-          )];
-        } else {
-          return [platformId, await postCarouselToThreads(
-            accessToken, conn.platform_user_id, caption, uploadedItems
-          )];
+          if (uploadedItems.length === 1) {
+            const r = await postToThreadsServer(
+              accessToken, conn.platform_user_id, caption, uploadedItems[0].url, uploadedItems[0].isVideo
+            );
+            return [platformId, { ...r, error: r.error ? `[single] ${r.error}` : undefined }];
+          } else {
+            const r = await postCarouselToThreads(
+              accessToken, conn.platform_user_id, caption, uploadedItems
+            );
+            return [platformId, { ...r, error: r.error ? `[carousel] ${r.error}` : undefined }];
+          }
+        } catch (err) {
+          return [platformId, { success: false, error: `[threads-crash] ${err instanceof Error ? err.message : String(err)}` }];
         }
       }
 
