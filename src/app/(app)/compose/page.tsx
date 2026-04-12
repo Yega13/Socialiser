@@ -94,6 +94,51 @@ async function postToYouTube(
   return { success: true };
 }
 
+/** Fast Bluesky image prep — downscales to max 2048px, crops to 1:1, JPEG 0.85. No padding, no Instagram logic. */
+async function prepareImageForBluesky(
+  file: File,
+  offset: { x: number; y: number } = { x: 0.5, y: 0.5 },
+  imageFilters: FilterSettings = { brightness: 100, contrast: 100, saturation: 100 },
+): Promise<Blob> {
+  const bmp = await createImageBitmap(file);
+  const { width, height } = bmp;
+  const MAX = 2048;
+
+  // Downscale to max dimension first — this is the key speed optimization
+  let sw = width, sh = height;
+  if (sw > MAX || sh > MAX) {
+    const scale = MAX / Math.max(sw, sh);
+    sw = Math.round(sw * scale);
+    sh = Math.round(sh * scale);
+  }
+
+  // Crop to 1:1
+  const side = Math.min(sw, sh);
+  let srcX = 0, srcY = 0, srcW = width, srcH = height;
+  const ratio = width / height;
+  if (ratio > 1) {
+    srcW = Math.round(height * 1);
+    srcX = Math.round((width - srcW) * offset.x);
+  } else if (ratio < 1) {
+    srcH = Math.round(width / 1);
+    srcY = Math.round((height - srcH) * offset.y);
+  }
+
+  const canvas = document.createElement("canvas");
+  canvas.width = side;
+  canvas.height = side;
+  const ctx = canvas.getContext("2d")!;
+
+  const hasFilters = imageFilters.brightness !== 100 || imageFilters.contrast !== 100 || imageFilters.saturation !== 100;
+  if (hasFilters) {
+    ctx.filter = `brightness(${imageFilters.brightness}%) contrast(${imageFilters.contrast}%) saturate(${imageFilters.saturation}%)`;
+  }
+  ctx.drawImage(bmp, srcX, srcY, srcW > width ? width : srcW, srcH > height ? height : srcH, 0, 0, side, side);
+  bmp.close();
+
+  return new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), "image/jpeg", 0.85));
+}
+
 async function prepareImageForInstagram(
   file: File,
   padColor: string,
@@ -539,7 +584,7 @@ export default function ComposePage() {
             if (imageItems.length > 0) {
               setPostingStatus("Uploading images to Bluesky...");
               const results = await Promise.all(imageItems.map(async (img) => {
-                const { blob } = await prepareImageForInstagram(img.file, "#000000", 0.92, 1, img.cropOffset, filters);
+                const blob = await prepareImageForBluesky(img.file, img.cropOffset, filters);
                 const res = await fetch("https://bsky.social/xrpc/com.atproto.repo.uploadBlob", {
                   method: "POST",
                   headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "image/jpeg" },

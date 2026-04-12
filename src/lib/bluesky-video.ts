@@ -121,8 +121,8 @@ export async function uploadBlueskyVideo(
     if (!jobId) return { blob: uploadData.blob as BskyBlob };
 
     onStatus?.("Processing video on Bluesky...");
-    for (let i = 0; i < 90; i++) {
-      await new Promise((r) => setTimeout(r, 2000));
+    for (let i = 0; i < 180; i++) {
+      await new Promise((r) => setTimeout(r, 1000));
       if (abort.signal.aborted) return { error: "Video upload timed out" };
       try {
         const statusRes = await fetch(
