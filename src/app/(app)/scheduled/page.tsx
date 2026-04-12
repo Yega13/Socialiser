@@ -14,6 +14,7 @@ import {
   postToBlueskyServer,
 } from "@/app/(app)/compose/actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
+import type { BskyBlob } from "@/lib/bluesky-video";
 import { cn } from "@/lib/utils";
 
 type ScheduledPost = {
@@ -415,7 +416,7 @@ export default function ScheduledPage() {
           setProcessingStatus("Posting to Bluesky...");
           const postText = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
 
-          let bskyImages: { base64: string; mimeType: string; name: string }[] | undefined;
+          let bskyImageBlobs: BskyBlob[] | undefined;
           let bskyVideoBlob: { $type: string; ref: { $link: string }; mimeType: string; size: number } | null = null;
 
           if (post.media_urls && post.media_urls.length > 0) {
@@ -442,11 +443,17 @@ export default function ScheduledPage() {
               } else if (!isVideo) {
                 const fileRes = await fetch(signedUrl);
                 if (!fileRes.ok) continue;
-                const buf = await fileRes.arrayBuffer();
-                const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
-                if (!bskyImages) bskyImages = [];
-                if (bskyImages.length < 4) {
-                  bskyImages.push({ base64, mimeType, name: stored.split("/").pop() || "image.jpg" });
+                const imageBlob = await fileRes.blob();
+                const uploadRes = await fetch("https://bsky.social/xrpc/com.atproto.repo.uploadBlob", {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": mimeType },
+                  body: imageBlob,
+                });
+                if (!uploadRes.ok) continue;
+                const uploadData = await uploadRes.json();
+                if (!bskyImageBlobs) bskyImageBlobs = [];
+                if (bskyImageBlobs.length < 4) {
+                  bskyImageBlobs.push(uploadData.blob as BskyBlob);
                 }
               }
             }
@@ -457,7 +464,7 @@ export default function ScheduledPage() {
               accessToken,
               conn.platform_user_id!,
               postText,
-              bskyImages,
+              bskyImageBlobs,
               bskyVideoBlob
             );
           }

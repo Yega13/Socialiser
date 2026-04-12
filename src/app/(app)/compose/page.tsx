@@ -522,13 +522,12 @@ export default function ComposePage() {
       if (platformId === "bluesky") {
         const postText = `${title}${description ? "\n\n" + description : ""}`;
 
-        let bskyImages: { base64: string; mimeType: string; name: string }[] | undefined;
+        let bskyImageBlobs: BskyBlob[] | undefined;
         let bskyVideoBlob: BskyBlob | null = null;
 
         if (mediaItems.length > 0) {
           const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
           if (videoItem) {
-            // Upload video CLIENT-SIDE directly to Bluesky (no server action for large files)
             const videoResult = await uploadBlueskyVideo(
               accessToken, conn.platform_user_id!, videoItem.file, videoItem.file.name,
               (msg) => setPostingStatus(msg)
@@ -538,18 +537,28 @@ export default function ComposePage() {
           } else {
             const imageItems = mediaItems.filter((m) => m.file.type.startsWith("image/")).slice(0, 4);
             if (imageItems.length > 0) {
-              bskyImages = await Promise.all(imageItems.map(async (img) => {
-                const { blob, name } = await prepareImageForInstagram(img.file, "#000000", 0.92, 1, img.cropOffset, filters);
-                const buf = await blob.arrayBuffer();
-                const base64 = btoa(Array.from(new Uint8Array(buf), (b) => String.fromCharCode(b)).join(""));
-                return { base64, mimeType: "image/jpeg", name };
+              setPostingStatus("Uploading images to Bluesky...");
+              const results = await Promise.all(imageItems.map(async (img) => {
+                const { blob } = await prepareImageForInstagram(img.file, "#000000", 0.92, 1, img.cropOffset, filters);
+                const res = await fetch("https://bsky.social/xrpc/com.atproto.repo.uploadBlob", {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "image/jpeg" },
+                  body: blob,
+                });
+                if (!res.ok) {
+                  const err = await res.json().catch(() => ({}));
+                  throw new Error(err?.message || `Image upload failed (${res.status})`);
+                }
+                const data = await res.json();
+                return data.blob as BskyBlob;
               }));
+              bskyImageBlobs = results;
             }
           }
         }
 
         setPostingStatus("Creating Bluesky post...");
-        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImages, bskyVideoBlob)];
+        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImageBlobs, bskyVideoBlob)];
       }
 
       return [platformId, { success: false, error: "Unknown platform" }];

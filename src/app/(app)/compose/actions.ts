@@ -451,27 +451,6 @@ export async function refreshBlueskySession(
   return data.accessJwt ? { accessJwt: data.accessJwt, refreshJwt: data.refreshJwt } : null;
 }
 
-async function bskyUploadBlob(
-  accessJwt: string,
-  fileBytes: ArrayBuffer,
-  mimeType: string
-): Promise<{ blob?: { $type: string; ref: { $link: string }; mimeType: string; size: number }; error?: string }> {
-  const res = await fetch(`${BSKY_API}/com.atproto.repo.uploadBlob`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${accessJwt}`,
-      "Content-Type": mimeType,
-    },
-    body: fileBytes,
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({}));
-    return { error: err?.message || `Upload failed (${res.status})` };
-  }
-  const data = await res.json();
-  return { blob: data.blob };
-}
-
 function detectFacets(text: string): { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] {
   const encoder = new TextEncoder();
   const facets: { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] = [];
@@ -506,7 +485,7 @@ export async function postToBlueskyServer(
   accessJwt: string,
   did: string,
   text: string,
-  images?: { base64: string; mimeType: string; name: string }[],
+  imageBlobs?: { $type: string; ref: { $link: string }; mimeType: string; size: number }[],
   videoBlob?: { $type: string; ref: { $link: string }; mimeType: string; size: number } | null
 ): Promise<{ success: boolean; error?: string }> {
   try {
@@ -519,23 +498,13 @@ export async function postToBlueskyServer(
       ...(facets.length > 0 && { facets }),
     };
 
-    // Embed images (up to 4) — upload in parallel
-    if (images && images.length > 0) {
-      const uploadResults = await Promise.all(
-        images.slice(0, 4).map(async (img) => {
-          const binary = Uint8Array.from(atob(img.base64), (c) => c.charCodeAt(0));
-          return bskyUploadBlob(accessJwt, binary.buffer, img.mimeType);
-        })
-      );
-      const firstError = uploadResults.find((r) => r.error);
-      if (firstError) return { success: false, error: `Image upload: ${firstError.error}` };
+    if (imageBlobs && imageBlobs.length > 0) {
       record.embed = {
         $type: "app.bsky.embed.images",
-        images: uploadResults.map((r) => ({ alt: "", image: r.blob })),
+        images: imageBlobs.map((blob) => ({ alt: "", image: blob })),
       };
     }
 
-    // Embed video (pre-uploaded blob from client)
     if (videoBlob) {
       record.embed = {
         $type: "app.bsky.embed.video",

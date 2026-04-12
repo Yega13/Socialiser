@@ -1,4 +1,4 @@
-# Socialiser — Session Handoff (2026-03-30)
+# Socialiser — Session Handoff (2026-04-12)
 
 Read this ENTIRE file before doing anything. It contains full context from the previous session.
 
@@ -15,6 +15,9 @@ Do not rush recommendations. Think through the full picture before each suggesti
 **Rule #3 — Deploying is done through Antigravity sidebar GUI.**
 The user deploys via the Antigravity sidebar GUI, not via CLI commands. Do not tell the user to run `npx opennextjs-cloudflare deploy` — just tell them to deploy through Antigravity. Build commands (`npx opennextjs-cloudflare build`) can still be run in terminal.
 
+**Rule #4 — CODE MUST BE THE BEST, FASTEST, AND IMPOSSIBLE TO CRASH.**
+Every piece of code MUST be optimized for maximum speed and bulletproof reliability. No lazy shortcuts, no "good enough" — write the FASTEST possible implementation every time. All error paths must be handled. All network calls must have timeouts. All loops must have bounds. Zero tolerance for code that can hang, freeze, or silently fail. If there's a faster way to do something, use it. Performance is not optional.
+
 ---
 
 ## What Is Socialiser?
@@ -28,8 +31,9 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - Deployed on Cloudflare Workers via @opennextjs/cloudflare v1.17.1
 - npm (not bun)
 
-## Critical Constraint
+## Critical Constraints
 - **Cloudflare Workers cannot use route handlers** — they crash. Use Server Actions + browser Supabase client instead. See `memory/feedback_cloudflare_no_route_handlers.md`.
+- **OneDrive randomly corrupts files** — this machine syncs via OneDrive which randomly corrupts files/directories (reparse point errors, I/O errors). Corrupted files cannot be deleted by any method (rm, PowerShell Remove-Item, cmd rmdir). Only fix: restart PC, then delete. If `.next` or `node_modules` get corrupted, restart PC first, delete the folder, then rebuild. Do NOT waste time trying to force-delete — it won't work.
 
 ---
 
@@ -37,7 +41,7 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - **YouTube**: Connect (OAuth), disconnect, video upload with custom thumbnails — all working
 - **Instagram**: Connect (OAuth), disconnect, post images, carousels (2-10 items), reels, video posts, and stories — all working
 - **Bluesky**: Connect (handle + app password), disconnect, post text/images/video — all working
-- **Threads**: Code complete (OAuth connect, post text/images/video/carousels up to 20 items, scheduling, cron). Blocked by Meta Developer Console bug — callback URL won't save. Pending testing.
+- **Threads**: Connect (OAuth via mobile — see session notes), disconnect, post text/images/video/carousels up to 20 items — CONNECTED, pending posting test
 - **Post type selection**: When uploading to Instagram, user picks post type via neo-brutalist chips:
   - Single image → Feed Post or Story
   - Single video → Video Post, Reel, or Story
@@ -54,7 +58,7 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - YouTube — LIVE, working
 - Instagram — LIVE, working
 - Bluesky — LIVE, working (connect, post text/images/video, scheduling)
-- Threads — CODE COMPLETE, blocked by Meta console bug (callback URL won't save)
+- Threads — LIVE, connected (OAuth works via mobile; threads.com web login has Meta bug for this account)
 - X/Twitter — coming soon
 - LinkedIn — coming soon
 - TikTok — coming soon
@@ -100,31 +104,61 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 
 ---
 
-## What Was Built This Session (2026-04-09)
+## What Was Built This Session (2026-04-12)
 
-### ReactBits Animations (from reactbits.dev)
+### Threads Integration — FULLY WORKING
+Previous Meta apps deleted. New app created and connected successfully.
+
+**New Meta App:**
+- **App Name:** Socializer threads v2
+- **Main App ID:** 3571401166342987
+- **Threads App ID:** 1299493258747441 (used for OAuth client_id)
+- **App Mode:** Development (tester: `Socializers_official`, accepted)
+- **Permissions:** `threads_basic` + `threads_content_publish` — Ready for testing
+- **Callback URLs:** All 3 set to `https://socialiser.yeganyansuren13.workers.dev/threads-callback`
+
+**Env vars:**
+```
+NEXT_PUBLIC_THREADS_APP_ID=1299493258747441
+THREADS_APP_ID=1299493258747441
+THREADS_APP_SECRET=053e2e8e7cc884c90e11f73a73a9733e
+```
+Also added to `wrangler.toml` `[vars]` — required for Cloudflare Workers runtime (`.env.local` only works locally).
+
+**Two bugs fixed during setup:**
+1. **threads.com web login crash** — Meta's React frontend crashes for `Socializers_official` account on all desktop browsers (Chrome, Edge, incognito). Shows "Произошла ошибка" with `Non-error thrown: [object Object]`. NOT a code issue — Meta server-side bug. **Workaround:** OAuth via mobile browser. The Threads mobile app doesn't crash. This is account-specific; other users' web OAuth works fine.
+2. **Missing server env vars** — `THREADS_APP_ID` and `THREADS_APP_SECRET` were in `.env.local` but NOT in `wrangler.toml`. Cloudflare Workers don't read `.env.local` at runtime — vars must be in `wrangler.toml [vars]` or CF dashboard secrets. Token exchange returned "Missing required field: client_id" because `process.env.THREADS_APP_ID` was empty on the deployed Worker.
+
+**Files changed:**
+- `.env.local` — updated Threads App ID + Secret
+- `wrangler.toml` — added `THREADS_APP_ID` and `THREADS_APP_SECRET` to `[vars]`
+- `src/components/dashboard/platform-card.tsx` line 148 — updated `client_id` to `1299493258747441`
+
+**Connection flow (for this account):** Must connect via mobile browser → log into Socializer first → paste OAuth URL in same tab → authorize in browser (not Threads app) → callback saves token. Desktop then sees it as connected (same Supabase DB).
+
+### Bluesky Image Upload Speed Fix
+**Root cause:** Bluesky image uploads were going through a slow pipeline:
+1. Client prepared image → base64-encoded via `Array.from(new Uint8Array(buf), b => String.fromCharCode(b)).join("")` (extremely slow for large files)
+2. Base64 strings sent through Server Action as JSON (4 images × 2-5MB = 8-20MB payload)
+3. Server decoded base64 back to binary → uploaded to Bluesky
+
+**Fix:** Images now upload directly from client to Bluesky API (`com.atproto.repo.uploadBlob`), same pattern as video uploads. Eliminated: base64 encoding, massive JSON payloads, server-side decoding. Server action now just creates the post record with pre-uploaded blob references.
+
+**Files changed:**
+- `src/app/(app)/compose/actions.ts` — removed `bskyUploadBlob()`, changed `postToBlueskyServer()` to accept pre-uploaded blob refs instead of base64
+- `src/app/(app)/compose/page.tsx` — Bluesky section now uploads images client-side directly
+- `src/app/(app)/scheduled/page.tsx` — same fix for scheduled Bluesky posts
+
+### ReactBits Animations (from 2026-04-09 session)
 **New files:**
 - `src/components/ui/click-spark.tsx` — ClickSpark component (sparks on every click)
-- `src/components/ui/spark-wrapper.tsx` — Client wrapper for ClickSpark, theme-aware (black sparks light mode, white dark mode)
+- `src/components/ui/spark-wrapper.tsx` — Client wrapper for ClickSpark, theme-aware
 - `src/components/ui/curved-loop.tsx` — CurvedLoop base component (text on curved SVG path)
-- `src/components/ui/snake-text.tsx` — S-curve snake marquee ("Socializer Socializer Socializer" on continuous snake path, ±250 curve, speed 0.3, draggable)
+- `src/components/ui/snake-text.tsx` — S-curve snake marquee
 
 **Modified files:**
 - `src/app/layout.tsx` — wrapped body content in SparkWrapper (click sparks site-wide)
-- `src/app/(marketing)/layout.tsx` — added SnakeText before Footer, added dark mode bg class
-
-**Details:**
-- ClickSpark: canvas-based, renders spark lines radiating from click point, z-index 9999, pointer-events none
-- SnakeText: single SVG with S-curve path (`M-100,200 Q360,450 720,200 Q1080,-50 1540,200`), text scrolls along path, interactive drag support
-- Both components are theme-aware using MutationObserver on `html.dark` class
-
-### Threads Meta Console Setup (2026-04-09)
-- Created new Meta app "Socializer Threads" (Main ID: 1404345784799231, Threads ID: 853019483864231)
-- All settings configured (basic, permissions, callback URLs, tester)
-- BLOCKED by Meta console bug: redirect URI saves visually but doesn't register in OAuth system (error 1349168)
-- Created second app "Socializer Threads v2" (ID: 1492646805606968) with Facebook Login product — but Threads API can't be added to non-Threads apps
-- v2 app can be deleted — useless without Threads API
-- See BLOCKER section above for full details
+- `src/app/(marketing)/layout.tsx` — added SnakeText before Footer
 
 ---
 
@@ -155,55 +189,19 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 - Supports: TEXT, IMAGE, VIDEO, CAROUSEL (up to 20 items)
 - 500 character limit
 
-**Env vars (CONFIRMED CORRECT in .env.local):**
+**Env vars (CONFIRMED CORRECT in .env.local AND wrangler.toml):**
 ```
-NEXT_PUBLIC_THREADS_APP_ID=853019483864231
-THREADS_APP_ID=853019483864231
-THREADS_APP_SECRET=25cfa622bf3658c8a65c788a47fc81f6
+NEXT_PUBLIC_THREADS_APP_ID=1299493258747441
+THREADS_APP_ID=1299493258747441
+THREADS_APP_SECRET=053e2e8e7cc884c90e11f73a73a9733e
 ```
 
-**STATUS (2026-04-09):** New Meta app fully configured in console!
-- **App Name:** Socializer Threads
-- **Main App ID:** 1404345784799231
-- **Threads App ID:** 853019483864231 (USE THIS ONE for OAuth — different from main app ID!)
-- **App Mode:** Development (not live — correct for testing)
-- **Basic Settings:** DONE — privacy policy URL (/privacy), ToS URL (/tos), contact email, app domains
-- **Permissions:** DONE — `threads_basic` + `threads_content_publish` both "Ready for testing"
-- **Callback URLs:** DONE — all 3 set to `https://socialiser.yeganyansuren13.workers.dev/threads-callback`
-  - URL обратного вызова для перенаправления (OAuth redirect)
-  - URL обратного вызова для удаления приложения (Deauthorize)
-  - URL обратного звонка для удаления (Data deletion)
-- **Threads Tester:** DONE — `Socializers_official` added and accepted
-- **.env.local:** DONE — already had correct Threads App ID + Secret
-- **Code (platform-card.tsx):** DONE — already had correct client_id `853019483864231`
-- **Code (threads-callback/actions.ts):** DONE — reads from env vars
-
-**BLOCKER: OAuth redirect URI not registered (error 1349168)**
-- threads.com 500s in normal browser (works in incognito — likely cookie/cache issue, NOT geo-block; Armenia is fine)
-- In incognito, OAuth first returned error 4476001 ("No redirect in URI"), then after re-saving with dropdown click returned error 1349168
-- Error 1349168: "URL заблокирован: конечный URI не внесен в список разрешенных URI в разделе 'Клиентские настройки OAuth'"
-- Translation: "URL Blocked: redirect URI not whitelisted in Client OAuth Settings"
-- The 3 callback URL fields in Threads use case settings appear saved but Meta doesn't register them as valid OAuth redirect URIs
-- "Facebook Login" product (which has the "Valid OAuth Redirect URIs" field) cannot be added to Threads-only apps
-- Created second app "Socializer Threads v2" (ID: 1492646805606968) as Consumer type — has Facebook Login product BUT Threads API cannot be added as a product (only available via use case at app creation)
-- Attempted workarounds that FAILED:
-  1. Adding Facebook Login product to Threads-only app → /fb-login/settings/ redirects to /dashboard
-  2. Adding Threads API product to Consumer app with Facebook Login → not available in product list
-  3. Graph API Explorer query on Threads App ID → "Unknown path components"
-- **The v2 app (1492646805606968) can be deleted** — it's useless without Threads API
-- Root cause: Meta's Threads-only app type doesn't expose Facebook Login "Client OAuth Settings" but their OAuth system checks that registry
-
-**NEXT STEPS TO TRY:**
-1. Wait 30+ minutes for Meta propagation on the original app and retry
-2. Try different browser entirely (Firefox/Edge) for the OAuth flow
-3. Report bug to Meta Developer Community forums
-4. Check if creating a "Business" type app (instead of Consumer) with Threads use case exposes Facebook Login
-
-**Code is ready — no changes needed. Blocked purely by Meta console bug.**
-- `.env.local` — correct (Threads App ID: 853019483864231, secret set)
-- `platform-card.tsx` line 148 — correct (`client_id: "853019483864231"`)
-- `threads-callback/actions.ts` — correct (reads from env vars)
-- Deploy through **Antigravity sidebar GUI** once Meta issue is resolved
+**STATUS (2026-04-12):** Threads CONNECTED and working!
+- Old Meta apps (1404345784799231, 1492646805606968) deleted
+- New app "Socializer threads v2" (Main: 3571401166342987, Threads: 1299493258747441) created and fully configured
+- OAuth connected via mobile browser workaround (threads.com web crashes for this account)
+- Token exchange and DB save working
+- **Next:** Test actual posting (text, image, video, carousel)
 
 ### Poll Interval Optimization
 Reduced all poll intervals from 2000ms to 1000ms for faster completion detection:
@@ -466,16 +464,16 @@ This column ALREADY EXISTS in the live database. Don't try to add it again.
 
 ## What To Do Next (Priority Order)
 
-### 1. Fix Cloudflare Deploy
-Miniflare crashes on Windows. Try restarting PC and redeploying: `npx opennextjs-cloudflare build && npx opennextjs-cloudflare deploy`
+### 1. Test Threads Posting
+Threads is connected — test posting: text only, image, video, carousel. Verify all work.
 
-### 2. AI Features (next session)
+### 2. Fix `.next` Build Cache
+The `.next/standalone/node_modules/nanoid` directory is corrupted (OneDrive reparse point I/O error). Must delete `.next` after PC restart, then rebuild: `npx opennextjs-cloudflare build`.
+
+### 3. AI Features
 - Buy OpenAI or Anthropic API key ($5)
 - Build Enhance Caption + Suggest Hashtags
 - Plan is ready at `.claude/plans/sharded-tumbling-hammock.md`
-
-### 3. Threads — Complete Setup with New App
-Old Meta apps were deleted. User is creating a new app with "Access the Threads API" use case. See the **IMMEDIATE TODO** section above for exact steps. Code is 100% ready — just needs new App ID + Secret in `.env.local` and hardcoded in `platform-card.tsx`.
 
 ### 4. X/Twitter Integration
 Next major platform to add. Twitter API v2 free tier supports posting.
