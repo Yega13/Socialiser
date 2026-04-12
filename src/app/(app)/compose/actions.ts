@@ -265,27 +265,27 @@ export async function refreshThreadsToken(
 
 async function createThreadsContainer(
   accessToken: string,
-  _userId: string,
+  userId: string,
   params: Record<string, string>,
 ): Promise<{ id?: string; error?: string }> {
   const res = await fetch(
-    `${THREADS_API}/me/threads`,
+    `${THREADS_API}/${userId}/threads?access_token=${encodeURIComponent(accessToken)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ ...params, access_token: accessToken }),
+      body: new URLSearchParams(params),
     }
   );
   const text = await res.text();
   let data;
   try { data = JSON.parse(text); } catch {
-    return { error: `API non-JSON (${res.status}): ${text.slice(0, 200)}` };
+    return { error: `Container: non-JSON (${res.status}): ${text.slice(0, 200)}` };
   }
   if (!data.id) {
     const detail = data.error
-      ? `[${data.error.code}] ${data.error.message}`
-      : JSON.stringify(data);
-    return { error: `Container failed (${res.status}): ${detail}` };
+      ? `[${data.error.code}] ${data.error.message} (type: ${data.error.type})`
+      : JSON.stringify(data).slice(0, 300);
+    return { error: `Container (${res.status}): ${detail}` };
   }
   return { id: data.id };
 }
@@ -346,17 +346,24 @@ export async function postToThreadsServer(
 
     // Publish
     const publishRes = await fetch(
-      `${THREADS_API}/me/threads_publish`,
+      `${THREADS_API}/${userId}/threads_publish?access_token=${encodeURIComponent(accessToken)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ creation_id: container.id, access_token: accessToken }),
+        body: new URLSearchParams({ creation_id: container.id }),
       }
     );
-    const publishData = await publishRes.json();
+    const publishText = await publishRes.text();
+    let publishData;
+    try { publishData = JSON.parse(publishText); } catch {
+      return { success: false, error: `Publish: non-JSON (${publishRes.status}): ${publishText.slice(0, 200)}` };
+    }
 
     if (!publishData.id) {
-      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
+      const detail = publishData.error
+        ? `[${publishData.error.code}] ${publishData.error.message} (type: ${publishData.error.type})`
+        : JSON.stringify(publishData).slice(0, 300);
+      return { success: false, error: `Publish (${publishRes.status}): ${detail}` };
     }
     return { success: true };
   } catch (err) {
@@ -417,17 +424,24 @@ export async function postCarouselToThreads(
 
     // Step 4: Publish
     const publishRes = await fetch(
-      `${THREADS_API}/me/threads_publish`,
+      `${THREADS_API}/${userId}/threads_publish?access_token=${encodeURIComponent(accessToken)}`,
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
-        body: new URLSearchParams({ creation_id: carouselContainer.id, access_token: accessToken }),
+        body: new URLSearchParams({ creation_id: carouselContainer.id }),
       }
     );
-    const publishData = await publishRes.json();
+    const publishText = await publishRes.text();
+    let publishData;
+    try { publishData = JSON.parse(publishText); } catch {
+      return { success: false, error: `Publish: non-JSON (${publishRes.status}): ${publishText.slice(0, 200)}` };
+    }
 
     if (!publishData.id) {
-      return { success: false, error: publishData.error?.message ?? `Publish failed: ${JSON.stringify(publishData)}` };
+      const detail = publishData.error
+        ? `[${publishData.error.code}] ${publishData.error.message} (type: ${publishData.error.type})`
+        : JSON.stringify(publishData).slice(0, 300);
+      return { success: false, error: `Publish (${publishRes.status}): ${detail}` };
     }
     return { success: true };
   } catch (err) {
