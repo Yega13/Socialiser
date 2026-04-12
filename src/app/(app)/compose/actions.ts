@@ -422,6 +422,10 @@ export async function postCarouselToThreads(
     });
     if (!carouselContainer.id) return { success: false, error: carouselContainer.error };
 
+    // Step 3b: Wait for carousel container to be ready
+    const carouselWaitErr = await waitForThreadsContainer(accessToken, carouselContainer.id);
+    if (carouselWaitErr) return { success: false, error: `Carousel: ${carouselWaitErr}` };
+
     // Step 4: Publish
     const publishRes = await fetch(
       `${THREADS_API}/${userId}/threads_publish?access_token=${encodeURIComponent(accessToken)}`,

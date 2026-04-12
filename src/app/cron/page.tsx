@@ -918,6 +918,19 @@ export default async function CronPage({
               });
               const carData = await carRes.json();
               if (!carData.id) { results[platformId] = { success: false, error: carData.error?.message || "Carousel container failed" }; continue; }
+              // Wait for carousel container
+              for (let j = 0; j < 300; j++) {
+                await new Promise((r) => setTimeout(r, 1000));
+                const sRes = await fetch(`${THREADS_API}/${carData.id}?fields=status&access_token=${accessToken}`);
+                if (!sRes.ok) continue;
+                const sData = await sRes.json();
+                if (sData.status === "FINISHED") break;
+                if (sData.status === "ERROR" || sData.status === "EXPIRED") {
+                  results[platformId] = { success: false, error: "Threads carousel processing failed" };
+                  break;
+                }
+              }
+              if (results[platformId]) continue;
               // Publish carousel
               const publishRes = await fetch(`${THREADS_API}/me/threads_publish`, {
                 method: "POST",
