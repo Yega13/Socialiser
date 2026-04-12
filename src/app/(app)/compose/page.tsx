@@ -342,7 +342,7 @@ export default function ComposePage() {
     mediaItems.forEach((item) => URL.revokeObjectURL(item.preview));
 
     const newItems: MediaItem[] = [];
-    const maxFiles = instagramSelected ? 10 : selected.includes("threads") ? 20 : 1;
+    const maxFiles = instagramSelected ? 10 : threadsSelected ? 20 : blueskySelected ? 4 : 1;
     const filesToAdd = Array.from(files).slice(0, maxFiles);
 
     for (const file of filesToAdd) {
@@ -754,7 +754,10 @@ export default function ComposePage() {
   const youtubeSelected = selected.includes("youtube");
   const instagramSelected = selected.includes("instagram");
   const instagramConnected = connected.find((c) => c.platform === "instagram");
+  const blueskySelected = selected.includes("bluesky");
+  const threadsSelected = selected.includes("threads");
   const needsMedia = youtubeSelected || instagramSelected;
+  const showMediaPicker = needsMedia || blueskySelected || threadsSelected;
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const hasVideo = mediaItems.some((m) => m.file.type.startsWith("video/"));
   const canPost =
@@ -883,7 +886,7 @@ export default function ComposePage() {
         </div>
 
         {/* Media upload */}
-        {needsMedia && (
+        {showMediaPicker && (
           <div>
             <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
               {youtubeSelected && instagramSelected
@@ -891,15 +894,18 @@ export default function ComposePage() {
                 : youtubeSelected
                 ? "Video"
                 : "Photos & Videos"}
-              {" "}<span className="text-[#FF4F4F]">*</span>
+              {needsMedia ? <>{" "}<span className="text-[#FF4F4F]">*</span></> : <span className="font-normal text-[#5C5C5A] ml-2">Optional</span>}
               {instagramSelected && (
                 <span className="font-normal text-[#5C5C5A] ml-2">Up to 10 for carousel</span>
+              )}
+              {threadsSelected && !instagramSelected && (
+                <span className="font-normal text-[#5C5C5A] ml-2">Up to 20 for carousel</span>
               )}
             </label>
             <input
               type="file"
               accept={acceptTypes}
-              multiple={instagramSelected || selected.includes("threads")}
+              multiple={instagramSelected || threadsSelected || blueskySelected}
               onChange={(e) => handleFilesChange(e.target.files)}
               className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] cursor-pointer"
             />
