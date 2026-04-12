@@ -265,11 +265,11 @@ export async function refreshThreadsToken(
 
 async function createThreadsContainer(
   accessToken: string,
-  userId: string,
+  _userId: string,
   params: Record<string, string>,
 ): Promise<{ id?: string; error?: string }> {
   const res = await fetch(
-    `${THREADS_API}/${userId}/threads`,
+    `${THREADS_API}/me/threads`,
     {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -346,7 +346,7 @@ export async function postToThreadsServer(
 
     // Publish
     const publishRes = await fetch(
-      `${THREADS_API}/${userId}/threads_publish`,
+      `${THREADS_API}/me/threads_publish`,
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -417,7 +417,7 @@ export async function postCarouselToThreads(
 
     // Step 4: Publish
     const publishRes = await fetch(
-      `${THREADS_API}/${userId}/threads_publish`,
+      `${THREADS_API}/me/threads_publish`,
       {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },

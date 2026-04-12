@@ -808,7 +808,7 @@ export default async function CronPage({
 
           if (!post.media_urls || (post.media_urls as string[]).length === 0) {
             // Text-only post
-            const containerRes = await fetch(`${THREADS_API}/${conn.platform_user_id}/threads`, {
+            const containerRes = await fetch(`${THREADS_API}/me/threads`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body: new URLSearchParams({ media_type: "TEXT", text: caption, access_token: accessToken }),
@@ -818,7 +818,7 @@ export default async function CronPage({
               results[platformId] = { success: false, error: containerData.error?.message || "Container creation failed" };
               continue;
             }
-            const publishRes = await fetch(`${THREADS_API}/${conn.platform_user_id}/threads_publish`, {
+            const publishRes = await fetch(`${THREADS_API}/me/threads_publish`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body: new URLSearchParams({ creation_id: containerData.id, access_token: accessToken }),
@@ -847,7 +847,7 @@ export default async function CronPage({
                 params.media_type = "IMAGE";
                 params.image_url = mediaItems[0].url;
               }
-              const containerRes = await fetch(`${THREADS_API}/${conn.platform_user_id}/threads`, {
+              const containerRes = await fetch(`${THREADS_API}/me/threads`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 body: new URLSearchParams(params),
@@ -870,7 +870,7 @@ export default async function CronPage({
                 }
               }
               if (results[platformId]) continue;
-              const publishRes = await fetch(`${THREADS_API}/${conn.platform_user_id}/threads_publish`, {
+              const publishRes = await fetch(`${THREADS_API}/me/threads_publish`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 body: new URLSearchParams({ creation_id: containerData.id, access_token: accessToken }),
@@ -884,7 +884,7 @@ export default async function CronPage({
                 const params: Record<string, string> = { is_carousel_item: "true", access_token: accessToken };
                 if (item.isVideo) { params.media_type = "VIDEO"; params.video_url = item.url; }
                 else { params.media_type = "IMAGE"; params.image_url = item.url; }
-                const cRes = await fetch(`${THREADS_API}/${conn.platform_user_id}/threads`, {
+                const cRes = await fetch(`${THREADS_API}/me/threads`, {
                   method: "POST",
                   headers: { "Content-Type": "application/x-www-form-urlencoded" },
                   body: new URLSearchParams(params),
@@ -911,7 +911,7 @@ export default async function CronPage({
               }
               if (results[platformId]) continue;
               // Create carousel container
-              const carRes = await fetch(`${THREADS_API}/${conn.platform_user_id}/threads`, {
+              const carRes = await fetch(`${THREADS_API}/me/threads`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 body: new URLSearchParams({ media_type: "CAROUSEL", children: childIds.join(","), text: caption, access_token: accessToken }),
@@ -919,7 +919,7 @@ export default async function CronPage({
               const carData = await carRes.json();
               if (!carData.id) { results[platformId] = { success: false, error: carData.error?.message || "Carousel container failed" }; continue; }
               // Publish carousel
-              const publishRes = await fetch(`${THREADS_API}/${conn.platform_user_id}/threads_publish`, {
+              const publishRes = await fetch(`${THREADS_API}/me/threads_publish`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 body: new URLSearchParams({ creation_id: carData.id, access_token: accessToken }),

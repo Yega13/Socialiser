@@ -109,14 +109,13 @@ export async function uploadBlueskyVideo(
           return;
         }
 
-        // Non-2xx: check if response contains a usable blob (e.g. "Video already processed")
+        // Non-2xx but still usable: "Video already processed" or response has blob/jobId
         if (parsed) {
           const job = parsed.jobStatus as Record<string, unknown> | undefined;
-          if (job?.blob) {
-            // Video was already processed — treat as success
-            resolve(parsed);
-            return;
-          }
+          // If response has a blob anywhere, treat as success
+          if (job?.blob || parsed.blob) { resolve(parsed); return; }
+          // If response has a jobId, resolve so Step 4 can poll for the blob
+          if (parsed.jobId || job?.jobId) { resolve(parsed); return; }
         }
 
         const detail = parsed
