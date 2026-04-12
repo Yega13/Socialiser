@@ -110,10 +110,10 @@ export default function ScheduledPage() {
     for (const post of overduePosts) {
       setProcessingStatus(`Processing "${post.title}"...`);
 
-      // Mark as processing
+      // Mark as publishing (must be a valid status in DB constraint)
       await supabase
         .from("scheduled_posts")
-        .update({ status: "processing" })
+        .update({ status: "publishing" })
         .eq("id", post.id);
 
       const results: Record<string, { success: boolean; error?: string }> = {};
@@ -499,7 +499,7 @@ export default function ScheduledPage() {
           .from("scheduled_posts")
           .select("id, scheduled_at, status")
           .eq("user_id", user.id)
-          .in("status", ["processing", "preparing", "publishing"])
+          .in("status", ["preparing", "publishing"])
           .lt("scheduled_at", stuckCutoff);
 
         if (stuckPosts && stuckPosts.length > 0) {

@@ -147,33 +147,28 @@ async function prepareImageForInstagram(
   offset: { x: number; y: number } = { x: 0.5, y: 0.5 },
   imageFilters: FilterSettings = { brightness: 100, contrast: 100, saturation: 100 },
 ): Promise<{ blob: Blob; name: string }> {
-  const img = new Image();
-  const blobUrl = URL.createObjectURL(file);
-  await new Promise<void>((resolve) => { img.onload = () => resolve(); img.src = blobUrl; });
-  URL.revokeObjectURL(blobUrl);
-
-  const { width, height } = img;
+  const bmp = await createImageBitmap(file);
+  const { width, height } = bmp;
   const ratio = width / height;
   const canvas = document.createElement("canvas");
+  const hasFilters = imageFilters.brightness !== 100 || imageFilters.contrast !== 100 || imageFilters.saturation !== 100;
+  const filterStr = hasFilters ? `brightness(${imageFilters.brightness}%) contrast(${imageFilters.contrast}%) saturate(${imageFilters.saturation}%)` : "";
 
   if (targetRatio !== null) {
-    // Crop mode: crop to target ratio using user-defined offset
     let srcX = 0, srcY = 0, srcW = width, srcH = height;
     if (ratio > targetRatio) {
-      // Image is wider — crop sides, offset.x controls horizontal position
       srcW = Math.round(height * targetRatio);
       srcX = Math.round((width - srcW) * offset.x);
     } else if (ratio < targetRatio) {
-      // Image is taller — crop top/bottom, offset.y controls vertical position
       srcH = Math.round(width / targetRatio);
       srcY = Math.round((height - srcH) * offset.y);
     }
     canvas.width = srcW;
     canvas.height = srcH;
     const ctx = canvas.getContext("2d")!;
-    ctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
+    if (hasFilters) ctx.filter = filterStr;
+    ctx.drawImage(bmp, srcX, srcY, srcW, srcH, 0, 0, srcW, srcH);
   } else {
-    // Original mode: pad if outside Instagram's 4:5–1.91:1 range
     const minRatio = 4 / 5;
     const maxRatio = 1.91;
     let drawX = 0, drawY = 0;
@@ -196,23 +191,14 @@ async function prepareImageForInstagram(
     const ctx = canvas.getContext("2d")!;
     ctx.fillStyle = padColor;
     ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, drawX, drawY);
+    if (hasFilters) ctx.filter = filterStr;
+    ctx.drawImage(bmp, drawX, drawY);
   }
 
-  // Apply filters if any are non-default
-  const hasFilters = imageFilters.brightness !== 100 || imageFilters.contrast !== 100 || imageFilters.saturation !== 100;
-  let finalCanvas = canvas;
-  if (hasFilters) {
-    finalCanvas = document.createElement("canvas");
-    finalCanvas.width = canvas.width;
-    finalCanvas.height = canvas.height;
-    const fCtx = finalCanvas.getContext("2d")!;
-    fCtx.filter = `brightness(${imageFilters.brightness}%) contrast(${imageFilters.contrast}%) saturate(${imageFilters.saturation}%)`;
-    fCtx.drawImage(canvas, 0, 0);
-  }
+  bmp.close();
 
   const blob = await new Promise<Blob>((resolve) =>
-    finalCanvas.toBlob((b) => resolve(b!), "image/jpeg", quality)
+    canvas.toBlob((b) => resolve(b!), "image/jpeg", quality)
   );
   return { blob, name: file.name.replace(/\.[^.]+$/, ".jpg") };
 }
@@ -433,6 +419,49 @@ export default function ComposePage() {
       return { token: accessToken };
     }
 
+    // Pre-upload media to Supabase once (shared by Instagram + Threads)
+    const supabaseNeeded = (selected.includes("instagram") || selected.includes("threads")) && mediaItems.length > 0;
+    let sharedMediaUrls: { url: string; isVideo: boolean }[] | null = null;
+    let sharedUploadError: string | null = null;
+
+    if (supabaseNeeded) {
+      setPostingStatus("Preparing & uploading media...");
+      const uploadResults = await Promise.all(
+        mediaItems.map(async (item, i) => {
+          const isVideo = item.file.type.startsWith("video/");
+          let fileToUpload: File | Blob = item.file;
+          let uploadName = item.file.name;
+
+          if (!isVideo) {
+            const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
+            const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
+            fileToUpload = prepared.blob;
+            uploadName = prepared.name;
+          }
+
+          const fileName = `media/${Date.now()}-${i}-${uploadName}`;
+          const { error: uploadError } = await supabase.storage
+            .from("media")
+            .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
+
+          if (uploadError) return { error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
+
+          const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
+          const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
+          return { url: mediaUrl, isVideo };
+        })
+      );
+
+      const firstErr = uploadResults.find((r) => "error" in r);
+      if (firstErr && "error" in firstErr) {
+        sharedUploadError = firstErr.error as string;
+      } else {
+        sharedMediaUrls = uploadResults as { url: string; isVideo: boolean }[];
+      }
+    }
+
+    setPostingStatus(`Posting to ${selected.length} platform${selected.length !== 1 ? "s" : ""} in parallel...`);
+
     // Run all platforms in parallel
     const platformPromises = selected.map(async (platformId): Promise<[string, { success: boolean; error?: string }]> => {
       const conn = connected.find((c) => c.platform === platformId);
@@ -453,49 +482,18 @@ export default function ComposePage() {
       if (platformId === "instagram") {
         if (mediaItems.length === 0) return [platformId, { success: false, error: "Instagram requires at least one image or video" }];
         if (!conn.platform_user_id) return [platformId, { success: false, error: "Instagram account ID missing. Reconnect." }];
+        if (sharedUploadError) return [platformId, { success: false, error: sharedUploadError }];
+        if (!sharedMediaUrls) return [platformId, { success: false, error: "Media upload failed" }];
 
-        // Upload all media files to Supabase IN PARALLEL
-        const uploadResults = await Promise.all(
-          mediaItems.map(async (item, i) => {
-            const isVideo = item.file.type.startsWith("video/");
-            let fileToUpload: File | Blob = item.file;
-            let uploadName = item.file.name;
-
-            if (!isVideo) {
-              const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-              const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
-              fileToUpload = prepared.blob;
-              uploadName = prepared.name;
-            }
-
-            const fileName = `instagram/${Date.now()}-${i}-${uploadName}`;
-            const { error: uploadError } = await supabase.storage
-              .from("media")
-              .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
-
-            if (uploadError) return { error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
-
-            const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
-            const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
-            return { url: mediaUrl, isVideo };
-          })
-        );
-
-        const firstUploadError = uploadResults.find((r) => "error" in r);
-        if (firstUploadError && "error" in firstUploadError) {
-          return [platformId, { success: false, error: firstUploadError.error }];
-        }
-
-        const uploadedItems = uploadResults as { url: string; isVideo: boolean }[];
         const caption = `${title}${description ? "\n\n" + description : ""}`;
 
-        if (uploadedItems.length === 1) {
+        if (sharedMediaUrls.length === 1) {
           return [platformId, await postToInstagramServer(
             accessToken,
             conn.platform_user_id,
             caption,
-            uploadedItems[0].url,
-            uploadedItems[0].isVideo,
+            sharedMediaUrls[0].url,
+            sharedMediaUrls[0].isVideo,
             effectiveIgPostType === "reel" ? "reel" : effectiveIgPostType === "story" ? "story" : "post"
           )];
         } else {
@@ -503,7 +501,7 @@ export default function ComposePage() {
             accessToken,
             conn.platform_user_id,
             caption,
-            uploadedItems
+            sharedMediaUrls
           )];
         }
       }
@@ -515,53 +513,21 @@ export default function ComposePage() {
 
         try {
           if (mediaItems.length === 0) {
-            // Text-only post
             const r = await postToThreadsServer(accessToken, conn.platform_user_id, caption);
             return [platformId, { ...r, error: r.error ? `[text] ${r.error}` : undefined }];
           }
 
-          // Upload media to Supabase (reuse same pattern as Instagram)
-          const uploadResults = await Promise.all(
-            mediaItems.map(async (item, i) => {
-              const isVideo = item.file.type.startsWith("video/");
-              let fileToUpload: File | Blob = item.file;
-              let uploadName = item.file.name;
+          if (sharedUploadError) return [platformId, { success: false, error: `[upload] ${sharedUploadError}` }];
+          if (!sharedMediaUrls) return [platformId, { success: false, error: "[upload] Media upload failed" }];
 
-              if (!isVideo) {
-                const modeRatio = ASPECT_MODES.find((m) => m.id === aspectMode)?.ratio ?? null;
-                const prepared = await prepareImageForInstagram(item.file, padColor, imageQuality / 100, modeRatio, item.cropOffset, filters);
-                fileToUpload = prepared.blob;
-                uploadName = prepared.name;
-              }
-
-              const fileName = `threads/${Date.now()}-${i}-${uploadName}`;
-              const { error: uploadError } = await supabase.storage
-                .from("media")
-                .upload(fileName, fileToUpload, { upsert: true, contentType: isVideo ? item.file.type : "image/jpeg" });
-
-              if (uploadError) return { error: `Upload failed (file ${i + 1}): ${uploadError.message}` };
-
-              const { data: signedData } = await supabase.storage.from("media").createSignedUrl(fileName, 3600);
-              const mediaUrl = signedData?.signedUrl || supabase.storage.from("media").getPublicUrl(fileName).data.publicUrl;
-              return { url: mediaUrl, isVideo };
-            })
-          );
-
-          const firstUploadError = uploadResults.find((r) => "error" in r);
-          if (firstUploadError && "error" in firstUploadError) {
-            return [platformId, { success: false, error: `[upload] ${firstUploadError.error}` }];
-          }
-
-          const uploadedItems = uploadResults as { url: string; isVideo: boolean }[];
-
-          if (uploadedItems.length === 1) {
+          if (sharedMediaUrls.length === 1) {
             const r = await postToThreadsServer(
-              accessToken, conn.platform_user_id, caption, uploadedItems[0].url, uploadedItems[0].isVideo
+              accessToken, conn.platform_user_id, caption, sharedMediaUrls[0].url, sharedMediaUrls[0].isVideo
             );
             return [platformId, { ...r, error: r.error ? `[single] ${r.error}` : undefined }];
           } else {
             const r = await postCarouselToThreads(
-              accessToken, conn.platform_user_id, caption, uploadedItems
+              accessToken, conn.platform_user_id, caption, sharedMediaUrls
             );
             return [platformId, { ...r, error: r.error ? `[carousel] ${r.error}` : undefined }];
           }
@@ -609,7 +575,6 @@ export default function ComposePage() {
           }
         }
 
-        setPostingStatus("Creating Bluesky post...");
         return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImageBlobs, bskyVideoBlob)];
       }
 

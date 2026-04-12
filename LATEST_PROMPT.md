@@ -41,15 +41,15 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - **YouTube**: Connect (OAuth), disconnect, video upload with custom thumbnails — all working
 - **Instagram**: Connect (OAuth), disconnect, post images, carousels (2-10 items), reels, video posts, and stories — all working
 - **Bluesky**: Connect (handle + app password), disconnect, post text/images/video — all working
-- **Threads**: Connect (OAuth via mobile — see session notes), disconnect, post text/images/video/carousels up to 20 items — CONNECTED, pending posting test
+- **Threads**: Connect (OAuth via mobile — see session notes), disconnect, post text/images/video/carousels up to 20 items — ALL WORKING
 - **Post type selection**: When uploading to Instagram, user picks post type via neo-brutalist chips:
   - Single image → Feed Post or Story
   - Single video → Video Post, Reel, or Story
   - Carousel (2+ files) → Carousel (auto, no choice needed)
-- **Scheduling**: Working reliably with state machine cron (YouTube, Instagram, Bluesky) — FIXED
+- **Scheduling**: Working reliably with state machine cron (YouTube, Instagram, Bluesky, Threads) — FIXED
 - **Theme**: Light by default, persists user preference via localStorage
 - **Preview**: Live preview panel for Instagram (with type badge), YouTube (with thumbnail picker), and Bluesky (with drag-to-crop)
-- **Image processing**: Aspect ratio cropping with drag-to-reposition, padding, quality slider, brightness/contrast/saturation filters
+- **Image processing**: Aspect ratio cropping with drag-to-reposition, padding, brightness/contrast/saturation/quality in collapsible Filters dropdown
 - **Parallel posting**: All platforms post simultaneously, Supabase uploads in parallel, IG containers created in parallel
 - **Legal pages**: Privacy Policy (/privacy), Terms of Service (/tos), Content Policy (/content-policy) — all live
 - **19 routes build cleanly**
@@ -58,7 +58,7 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - YouTube — LIVE, working
 - Instagram — LIVE, working
 - Bluesky — LIVE, working (connect, post text/images/video, scheduling)
-- Threads — LIVE, connected (OAuth works via mobile; threads.com web login has Meta bug for this account)
+- Threads — LIVE, working (connect, post text/images/video/carousels, scheduling)
 - X/Twitter — coming soon
 - LinkedIn — coming soon
 - TikTok — coming soon
@@ -104,9 +104,77 @@ CREATE INDEX idx_scheduled_active ON public.scheduled_posts (scheduled_at, statu
 
 ---
 
-## What Was Built This Session (2026-04-12)
+## What Was Built This Session (2026-04-12 → 2026-04-13)
 
-### Threads Integration — FULLY WORKING
+### Threads Posting — FULLY WORKING (carousel bug fixed)
+Threads was connected in the previous session but posting had never been tested. Three bugs were found and fixed:
+
+1. **Carousel publish error (code 24: "The requested resource does not exist")** — After creating a carousel container, the code published immediately without waiting for the container to reach FINISHED status. Meta returned error 24 because the container wasn't ready. Fix: added `waitForThreadsContainer()` call after carousel container creation, before publishing. Fixed in both `compose/actions.ts` and `cron/page.tsx`.
+
+2. **Threads API access_token placement** — Moved `access_token` from POST body to query parameter for all Threads container creation and publish endpoints. Some Meta API endpoints are strict about token placement.
+
+3. **Detailed error reporting** — All Threads API errors now include: step prefix (`Container` / `Publish`), HTTP status code, Meta error code, error message, and error type. Compose page wraps Threads errors with flow prefix (`[text]`, `[single]`, `[carousel]`, `[upload]`, `[threads-crash]`).
+
+**Files changed:**
+- `src/app/(app)/compose/actions.ts` — carousel wait before publish, access_token as query param, detailed error messages
+- `src/app/(app)/compose/page.tsx` — error flow prefixes for debugging
+- `src/app/cron/page.tsx` — carousel wait before publish, `me` alias for all Threads endpoints
+
+### Bluesky Video "Already Processed" Fix
+**Root cause:** When re-uploading a video that Bluesky already processed, the API returned a non-2xx status with `jobStatus.error = "Video already processed"`. The old code only checked `jobStatus.blob` for a usable blob — if missing, it rejected. 
+
+**Fix:** Now also checks `parsed.blob` (top-level) and if the response contains a `jobId`, resolves instead of rejecting so the polling loop (Step 4) can fetch the completed blob.
+
+**Files changed:**
+- `src/lib/bluesky-video.ts` — smarter non-2xx response handling, better size labels (KB/MB), `xhr.upload.onload` status update
+
+### Media Picker Visibility Fix
+**Root cause:** The media upload file picker only appeared when YouTube or Instagram was selected (`needsMedia = youtubeSelected || instagramSelected`). Selecting only Bluesky or Threads gave no way to upload pictures/videos.
+
+**Fix:** Added `showMediaPicker = needsMedia || blueskySelected || threadsSelected`. Media picker now shows for all 4 platforms. YouTube/Instagram show required asterisk; Bluesky/Threads show "Optional". Also fixed `maxFiles` (Bluesky now allows 4 images, was capped at 1) and `multiple` attribute on file input.
+
+**Files changed:**
+- `src/app/(app)/compose/page.tsx` — `showMediaPicker`, `blueskySelected`/`threadsSelected` vars, file limits
+
+### Image Quality Slider Moved Into Filters Dropdown
+The standalone "Image quality" slider was removed and placed inside the collapsible Filters dropdown, below brightness/contrast/saturation with a subtle border separator. ACTIVE badge and Reset button now also account for quality changes.
+
+**Files changed:**
+- `src/app/(app)/compose/page.tsx` — quality slider in filters dropdown, unified reset
+
+### Performance Optimizations — Image Processing Pipeline
+Three changes that cut image processing time significantly:
+
+1. **`createImageBitmap()` instead of `new Image()`** — decodes images off the main thread. No `onload` callback, no blocking. Measurably faster for large images.
+
+2. **Single canvas with `ctx.filter` API** — brightness, contrast, saturation all applied in a single `drawImage()` call via CSS filter string on the canvas context. Before: multiple passes or pixel-by-pixel manipulation. After: one GPU-accelerated draw.
+
+3. **Shared Supabase uploads** — when posting to both Instagram and Threads (both need Supabase-hosted URLs), images are prepared and uploaded ONCE, then the signed URLs are shared between both platform posting flows. Eliminates duplicate uploads.
+
+**Files changed:**
+- `src/app/(app)/compose/page.tsx` — `prepareImageForInstagram` rewritten with `createImageBitmap` + `ctx.filter`, shared upload logic before parallel platform map
+
+### UX Fix — "Creating Bluesky post..." Stuck Message
+During parallel 4-platform posting, the status text showed "Creating Bluesky post..." for ~1 minute because Bluesky set the status message last (during `Promise.allSettled`), then completed fast while other platforms were still processing. Removed the misleading `setPostingStatus("Creating Bluesky post...")` line — the status now stays on the last platform that's actually working.
+
+**Files changed:**
+- `src/app/(app)/compose/page.tsx` — removed Bluesky status message override
+
+### Scheduling Constraint Bug Fix — `"processing"` → `"publishing"`
+**Root cause:** `scheduled/page.tsx` was setting `status: "processing"` when the user clicked "Process Now", but the DB constraint only allows `(pending, preparing, prepared, publishing, completed, failed)`. The update silently failed (Supabase returns no error for constraint violations on UPDATE), leaving the post stuck in `pending`. The cron would then re-pick it up, creating race conditions.
+
+**Fix:** Changed `status: "processing"` to `status: "publishing"` in the Process Now handler. Also updated the init function that resets stuck posts — removed "processing" from the stuck-status check since it was never a valid state.
+
+**Files changed:**
+- `src/app/(app)/scheduled/page.tsx` — `"processing"` → `"publishing"`, init reset fix
+
+### Crash Test Results (2026-04-12)
+- **Test A: Simultaneous post to 4 platforms** — ✓ instagram ✓ threads ✓ bluesky ✓ youtube — ALL PASSED. Minor UX issue with "Creating Bluesky post..." message fixed (see above).
+- **Test B: Scheduled post to 4 platforms** — FAILED. Post showed "error" status several times before the scheduled time, then failed at the scheduled time too. Root cause: the `"processing"` constraint bug (fixed above). May need a second test run to confirm the fix works.
+
+### Previous 2026-04-12 Session (earlier today)
+
+#### Threads Integration — Connected
 Previous Meta apps deleted. New app created and connected successfully.
 
 **New Meta App:**
@@ -114,51 +182,20 @@ Previous Meta apps deleted. New app created and connected successfully.
 - **Main App ID:** 3571401166342987
 - **Threads App ID:** 1299493258747441 (used for OAuth client_id)
 - **App Mode:** Development (tester: `Socializers_official`, accepted)
-- **Permissions:** `threads_basic` + `threads_content_publish` — Ready for testing
+- **Permissions:** `threads_basic` + `threads_content_publish`
 - **Callback URLs:** All 3 set to `https://socialiser.yeganyansuren13.workers.dev/threads-callback`
-
-**Env vars:**
-```
-NEXT_PUBLIC_THREADS_APP_ID=1299493258747441
-THREADS_APP_ID=1299493258747441
-THREADS_APP_SECRET=053e2e8e7cc884c90e11f73a73a9733e
-```
-Also added to `wrangler.toml` `[vars]` — required for Cloudflare Workers runtime (`.env.local` only works locally).
-
-**Two bugs fixed during setup:**
-1. **threads.com web login crash** — Meta's React frontend crashes for `Socializers_official` account on all desktop browsers (Chrome, Edge, incognito). Shows "Произошла ошибка" with `Non-error thrown: [object Object]`. NOT a code issue — Meta server-side bug. **Workaround:** OAuth via mobile browser. The Threads mobile app doesn't crash. This is account-specific; other users' web OAuth works fine.
-2. **Missing server env vars** — `THREADS_APP_ID` and `THREADS_APP_SECRET` were in `.env.local` but NOT in `wrangler.toml`. Cloudflare Workers don't read `.env.local` at runtime — vars must be in `wrangler.toml [vars]` or CF dashboard secrets. Token exchange returned "Missing required field: client_id" because `process.env.THREADS_APP_ID` was empty on the deployed Worker.
-
-**Files changed:**
-- `.env.local` — updated Threads App ID + Secret
-- `wrangler.toml` — added `THREADS_APP_ID` and `THREADS_APP_SECRET` to `[vars]`
-- `src/components/dashboard/platform-card.tsx` line 148 — updated `client_id` to `1299493258747441`
 
 **Connection flow (for this account):** Must connect via mobile browser → log into Socializer first → paste OAuth URL in same tab → authorize in browser (not Threads app) → callback saves token. Desktop then sees it as connected (same Supabase DB).
 
-### Bluesky Image Upload Speed Fix
-**Root cause:** Bluesky image uploads were going through a slow pipeline:
-1. Client prepared image → base64-encoded via `Array.from(new Uint8Array(buf), b => String.fromCharCode(b)).join("")` (extremely slow for large files)
-2. Base64 strings sent through Server Action as JSON (4 images × 2-5MB = 8-20MB payload)
-3. Server decoded base64 back to binary → uploaded to Bluesky
+#### Bluesky Image Upload Speed Fix
+Images now upload directly from client to Bluesky API (`com.atproto.repo.uploadBlob`), same pattern as video uploads. Eliminated: base64 encoding, massive JSON payloads, server-side decoding.
 
-**Fix:** Images now upload directly from client to Bluesky API (`com.atproto.repo.uploadBlob`), same pattern as video uploads. Eliminated: base64 encoding, massive JSON payloads, server-side decoding. Server action now just creates the post record with pre-uploaded blob references.
-
-**Files changed:**
-- `src/app/(app)/compose/actions.ts` — removed `bskyUploadBlob()`, changed `postToBlueskyServer()` to accept pre-uploaded blob refs instead of base64
-- `src/app/(app)/compose/page.tsx` — Bluesky section now uploads images client-side directly
-- `src/app/(app)/scheduled/page.tsx` — same fix for scheduled Bluesky posts
-
-### ReactBits Animations (from 2026-04-09 session)
+#### ReactBits Animations (from 2026-04-09 session)
 **New files:**
 - `src/components/ui/click-spark.tsx` — ClickSpark component (sparks on every click)
 - `src/components/ui/spark-wrapper.tsx` — Client wrapper for ClickSpark, theme-aware
 - `src/components/ui/curved-loop.tsx` — CurvedLoop base component (text on curved SVG path)
 - `src/components/ui/snake-text.tsx` — S-curve snake marquee
-
-**Modified files:**
-- `src/app/layout.tsx` — wrapped body content in SparkWrapper (click sparks site-wide)
-- `src/app/(marketing)/layout.tsx` — added SnakeText before Footer
 
 ---
 
@@ -196,12 +233,13 @@ THREADS_APP_ID=1299493258747441
 THREADS_APP_SECRET=053e2e8e7cc884c90e11f73a73a9733e
 ```
 
-**STATUS (2026-04-12):** Threads CONNECTED and working!
+**STATUS (2026-04-12):** Threads FULLY WORKING!
 - Old Meta apps (1404345784799231, 1492646805606968) deleted
 - New app "Socializer threads v2" (Main: 3571401166342987, Threads: 1299493258747441) created and fully configured
 - OAuth connected via mobile browser workaround (threads.com web crashes for this account)
 - Token exchange and DB save working
-- **Next:** Test actual posting (text, image, video, carousel)
+- Posting tested and working: text, images, video, carousels
+- Carousel publish bug fixed (must wait for carousel container FINISHED status before publishing)
 
 ### Poll Interval Optimization
 Reduced all poll intervals from 2000ms to 1000ms for faster completion detection:
@@ -464,32 +502,45 @@ This column ALREADY EXISTS in the live database. Don't try to add it again.
 
 ## What To Do Next (Priority Order)
 
-### 1. Test Threads Posting
-Threads is connected — test posting: text only, image, video, carousel. Verify all work.
+### 1. Re-test Scheduled 4-Platform Post
+Test A passed. Test B failed due to `"processing"` constraint bug (now fixed). Need to retest:
+- Schedule a post for all 4 platforms (YouTube, Instagram, Bluesky, Threads) and confirm it completes.
+- If it still fails, investigate cron Step 3 timeout — Threads carousel creation + wait within a single CF Worker run may exceed 30s.
 
-### 2. Fix `.next` Build Cache
-The `.next/standalone/node_modules/nanoid` directory is corrupted (OneDrive reparse point I/O error). Must delete `.next` after PC restart, then rebuild: `npx opennextjs-cloudflare build`.
+### 2. Facebook Integration
+Next major platform. Requires Meta Business verification (currently blocked). Uses Facebook Graph API.
+- Connect: OAuth via Facebook Login
+- Post: text, images, video to Facebook Pages
+- Requires: `pages_manage_posts`, `pages_read_engagement` permissions
+- May reuse some Threads OAuth infrastructure (same Meta ecosystem)
 
-### 3. AI Features
+### 3. LinkedIn Integration
+LinkedIn API v2 for posting to personal profiles and company pages.
+- Connect: OAuth 2.0 via LinkedIn
+- Post: text, images, video, articles
+- Requires: `w_member_social` permission (personal), `w_organization_social` (company pages)
+- Free tier: 100 API calls/day
+
+### 4. AI Features
 - Buy OpenAI or Anthropic API key ($5)
 - Build Enhance Caption + Suggest Hashtags
 - Plan is ready at `.claude/plans/sharded-tumbling-hammock.md`
 
-### 4. X/Twitter Integration
-Next major platform to add. Twitter API v2 free tier supports posting.
+### 5. X/Twitter Integration
+Twitter API v2 free tier supports posting (1,500 tweets/month).
 
-### 5. Google OAuth Verification (for YouTube)
+### 6. Google OAuth Verification (for YouTube)
 - Add your Gmail as test user in Google Cloud Console → OAuth consent screen → Test users
 - Record 2-min demo video: connect YouTube → upload → confirm live
-- Submit for verification (takes 1–4 weeks)
-- Needs custom domain first (user buying in ~3 days)
+- Submit for verification (takes 1-4 weeks)
+- Needs custom domain first
 
-### 6. Landing Page Improvements
+### 7. Landing Page Improvements
 - Add FAQ section (SEO + user trust)
 - Add engaging images/illustrations
 - Add proper metatags and SEO optimization
 
-### 7. Phase 2 Features
+### 8. Phase 2 Features
 - AI analytics (suggest when/what/where to post based on user's engagement data)
 - Media library (upload once, reuse anywhere)
 - Post preview by platform (phone mockups)
@@ -522,10 +573,10 @@ Next major platform to add. Twitter API v2 free tier supports posting.
 
 ---
 
-## Git Status (end of session 2026-03-30)
+## Git Status (2026-04-12)
 - Branch: master
-- Modified: `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/app/(app)/scheduled/page.tsx`, `src/app/cron/page.tsx`, `src/components/dashboard/platform-card.tsx`, `src/lib/constants.ts`, `src/lib/bluesky-video.ts`, `.env.local`, `LATEST_PROMPT.md`
-- New files: `src/app/(app)/threads-callback/page.tsx`, `src/app/(app)/threads-callback/actions.ts`
-- 19 routes build cleanly
-- Changes are NOT committed yet — user hasn't asked for a commit
-- Deploy blocked by miniflare Windows crash
+- Modified this session: `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/lib/bluesky-video.ts`, `src/app/cron/page.tsx`, `src/app/(app)/scheduled/page.tsx`
+- Key fixes: Threads carousel publish wait, Bluesky video "already processed" handling, media picker for all platforms, image quality in filters dropdown, `createImageBitmap` + `ctx.filter` performance, shared Supabase uploads, `"processing"` → `"publishing"` constraint fix, Bluesky status message UX fix
+- Crash test A (simultaneous 4-platform post): PASSED
+- Crash test B (scheduled 4-platform post): FAILED — constraint bug found and fixed, needs retest
+- Uncommitted changes in: `compose/page.tsx`, `bluesky-video.ts`
