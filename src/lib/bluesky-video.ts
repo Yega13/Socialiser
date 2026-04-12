@@ -72,9 +72,10 @@ export async function uploadBlueskyVideo(
     }
 
     // Step 3: Upload video via XMLHttpRequest (real-time progress, 3 min timeout)
-    const sizeMB = videoFile.size / 1024 / 1024;
-    if (videoFile.size === 0) return { error: "Video file is empty (0 bytes)" };
-    onStatus?.(`Uploading video to Bluesky (0/${sizeMB.toFixed(1)} MB)...`);
+    const sizeBytes = videoFile.size;
+    if (sizeBytes === 0) return { error: "Video file is empty (0 bytes)" };
+    const sizeLabel = sizeBytes < 1048576 ? `${(sizeBytes / 1024).toFixed(0)} KB` : `${(sizeBytes / 1048576).toFixed(1)} MB`;
+    onStatus?.(`Uploading video to Bluesky (0/${sizeLabel})...`);
     const mimeType = videoFile instanceof File ? videoFile.type : "video/mp4";
     const uploadUrl = `https://video.bsky.app/xrpc/app.bsky.video.uploadVideo?${new URLSearchParams({ did, name: fileName })}`;
 
@@ -86,25 +87,42 @@ export async function uploadBlueskyVideo(
       xhr.timeout = 180000;
 
       xhr.upload.onprogress = (e) => {
-        if (e.lengthComputable) {
+        if (e.lengthComputable && e.total > 0) {
           const pct = Math.round((e.loaded / e.total) * 100);
-          const loadedMB = (e.loaded / 1024 / 1024).toFixed(1);
-          onStatus?.(`Uploading video... ${loadedMB}/${sizeMB.toFixed(1)} MB (${pct}%)`);
+          const loadedLabel = e.loaded < 1048576 ? `${(e.loaded / 1024).toFixed(0)} KB` : `${(e.loaded / 1048576).toFixed(1)} MB`;
+          onStatus?.(`Uploading video... ${loadedLabel}/${sizeLabel} (${pct}%)`);
         }
       };
 
+      // When all bytes are sent, update status before waiting for server response
+      xhr.upload.onload = () => {
+        onStatus?.("Upload complete, waiting for Bluesky to process...");
+      };
+
       xhr.onload = () => {
+        let parsed: Record<string, unknown> | null = null;
+        try { parsed = JSON.parse(xhr.responseText); } catch { /* ignore */ }
+
         if (xhr.status >= 200 && xhr.status < 300) {
-          try { resolve(JSON.parse(xhr.responseText)); }
-          catch { reject(new Error(`Invalid JSON response: ${xhr.responseText.slice(0, 200)}`)); }
-        } else {
-          let detail = `(${xhr.status})`;
-          try {
-            const errJson = JSON.parse(xhr.responseText);
-            detail = errJson?.jobStatus?.error || errJson?.message || errJson?.error || xhr.responseText.slice(0, 200);
-          } catch { detail = xhr.responseText.slice(0, 200) || `(${xhr.status})`; }
-          reject(new Error(`Video upload failed: ${detail}`));
+          if (parsed) resolve(parsed);
+          else reject(new Error(`Invalid JSON response: ${xhr.responseText.slice(0, 200)}`));
+          return;
         }
+
+        // Non-2xx: check if response contains a usable blob (e.g. "Video already processed")
+        if (parsed) {
+          const job = parsed.jobStatus as Record<string, unknown> | undefined;
+          if (job?.blob) {
+            // Video was already processed — treat as success
+            resolve(parsed);
+            return;
+          }
+        }
+
+        const detail = parsed
+          ? ((parsed.jobStatus as Record<string, unknown>)?.error || parsed.message || parsed.error || xhr.responseText.slice(0, 200))
+          : xhr.responseText.slice(0, 200) || `(${xhr.status})`;
+        reject(new Error(`Video upload failed: ${detail}`));
       };
       xhr.onerror = () => reject(new Error("Video upload network error"));
       xhr.ontimeout = () => reject(new Error("Video upload timed out (3 min)"));
@@ -116,9 +134,12 @@ export async function uploadBlueskyVideo(
       xhr.send(videoFile);
     });
 
-    // Step 4: Poll for processing completion (max 3 min, 2s interval)
+    // Step 4: Poll for processing completion (max 3 min, 1s interval)
     const jobId = uploadData.jobId as string | undefined;
-    if (!jobId) return { blob: uploadData.blob as BskyBlob };
+    const jobBlob = (uploadData.jobStatus as Record<string, unknown> | undefined)?.blob as BskyBlob | undefined;
+    if (!jobId) return { blob: (uploadData.blob as BskyBlob) ?? jobBlob };
+    // If response already has a completed blob, return immediately
+    if (jobBlob) return { blob: jobBlob };
 
     onStatus?.("Processing video on Bluesky...");
     for (let i = 0; i < 180; i++) {

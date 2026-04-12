@@ -1064,32 +1064,7 @@ export default function ComposePage() {
           </div>
         )}
 
-        {/* Image quality — Instagram images only */}
-        {instagramSelected && !youtubeSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
-          <div>
-            <label className="font-bold text-sm text-[#0A0A0A] block mb-2">
-              Image quality
-              <span className="font-normal text-[#5C5C5A] ml-2">{imageQuality}%</span>
-            </label>
-            <div className="flex items-center gap-3">
-              <span className="text-xs text-[#5C5C5A] shrink-0">Low</span>
-              <input
-                type="range"
-                min={30}
-                max={100}
-                value={imageQuality}
-                onChange={(e) => setImageQuality(Number(e.target.value))}
-                className="flex-1 accent-[#0A0A0A] h-2 cursor-pointer"
-              />
-              <span className="text-xs text-[#5C5C5A] shrink-0">Max</span>
-            </div>
-            <div className="text-xs text-[#5C5C5A] mt-1">
-              {imageQuality >= 90 ? "Best quality, larger file" : imageQuality >= 60 ? "Good quality, moderate file size" : "Smaller file, some quality loss"}
-            </div>
-          </div>
-        )}
-
-        {/* Image filters — Instagram images only */}
+        {/* Image filters & quality — Instagram images only */}
         {instagramSelected && !youtubeSelected && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
           <div>
             <button
@@ -1101,18 +1076,18 @@ export default function ComposePage() {
                 ▶
               </span>
               <span className="font-bold text-sm text-[#0A0A0A]">Filters</span>
-              {(filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100) && (
+              {(filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100 || imageQuality !== 92) && (
                 <span className="text-[10px] font-bold px-1.5 py-0.5 bg-[#7C3AED] text-white ml-auto">ACTIVE</span>
               )}
             </button>
             {filtersOpen && (
               <div className="mt-3 space-y-3">
-                {(filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100) && (
+                {(filters.brightness !== 100 || filters.contrast !== 100 || filters.saturation !== 100 || imageQuality !== 92) && (
                   <button
-                    onClick={() => setFilters({ brightness: 100, contrast: 100, saturation: 100 })}
+                    onClick={() => { setFilters({ brightness: 100, contrast: 100, saturation: 100 }); setImageQuality(92); }}
                     className="text-xs text-[#0095F6] font-bold hover:underline"
                   >
-                    Reset
+                    Reset all
                   </button>
                 )}
                 {([
@@ -1135,6 +1110,23 @@ export default function ComposePage() {
                     />
                   </div>
                 ))}
+                <div className="border-t border-[#E0E0E0] pt-3">
+                  <div className="flex items-center justify-between mb-1">
+                    <span className="text-xs text-[#5C5C5A]">Quality</span>
+                    <span className="text-xs font-bold text-[#0A0A0A] w-10 text-right">{imageQuality}%</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={30}
+                    max={100}
+                    value={imageQuality}
+                    onChange={(e) => setImageQuality(Number(e.target.value))}
+                    className="w-full accent-[#0A0A0A] h-2 cursor-pointer"
+                  />
+                  <div className="text-[10px] text-[#5C5C5A] mt-1">
+                    {imageQuality >= 90 ? "Best quality, larger file" : imageQuality >= 60 ? "Good balance" : "Smaller file, some loss"}
+                  </div>
+                </div>
               </div>
             )}
           </div>
