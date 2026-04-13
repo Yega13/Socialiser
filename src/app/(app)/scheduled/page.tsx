@@ -110,11 +110,14 @@ export default function ScheduledPage() {
     for (const post of overduePosts) {
       setProcessingStatus(`Processing "${post.title}"...`);
 
-      // Mark as publishing (must be a valid status in DB constraint)
-      await supabase
+      // Optimistic lock: claim post before processing (prevents double-post with cron)
+      const { data: claimed } = await supabase
         .from("scheduled_posts")
         .update({ status: "publishing" })
-        .eq("id", post.id);
+        .eq("id", post.id)
+        .eq("status", "pending")
+        .select("id");
+      if (!claimed?.length) continue; // Already claimed by cron
 
       const results: Record<string, { success: boolean; error?: string }> = {};
 
@@ -505,7 +508,7 @@ export default function ScheduledPage() {
         if (stuckPosts && stuckPosts.length > 0) {
           await supabase
             .from("scheduled_posts")
-            .update({ status: "pending" })
+            .update({ status: "pending", prepared_containers: null, results: null })
             .in("id", stuckPosts.map((p) => p.id));
         }
       }
