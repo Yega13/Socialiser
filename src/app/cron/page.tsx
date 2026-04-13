@@ -761,19 +761,21 @@ export default async function CronPage({
       .eq("is_active", true);
 
     let error: string | null = null;
+    const pollPrepErrors = containers._errors ?? {};
     const hasIgInPost = (post.platforms as string[]).includes("instagram");
     const hasThreadsInPost = (post.platforms as string[]).includes("threads");
     const hasBskyInPost = (post.platforms as string[]).includes("bluesky");
 
-    // Check if PREPARE didn't finish at all (no containers saved for platforms that need them)
-    if (hasIgInPost && !igState && !threadsState && !bskyState) {
+    // Check if PREPARE didn't finish at all (no containers AND no errors — means crash)
+    if (hasIgInPost && !igState && !threadsState && !bskyState && Object.keys(pollPrepErrors).length === 0) {
       await supabase.from("scheduled_posts").update({ status: "pending" }).eq("id", post.id);
       log.push(`"${post.title}": containers missing, reset to pending for retry`);
       continue;
     }
 
     // ── Poll Instagram containers ──
-    let igReady = !hasIgInPost || (igState?.ready ?? false);
+    // If IG had a prep error or no containers exist, consider it "done" (will fail in PUBLISH)
+    let igReady = !hasIgInPost || !!pollPrepErrors.instagram || !igState || (igState.ready ?? false);
     if (hasIgInPost && igState && !igState.ready) {
       const conn = connPlatforms?.find((c: Row) => c.platform === "instagram");
       if (!conn || !conn.platform_user_id) {
@@ -821,7 +823,7 @@ export default async function CronPage({
     }
 
     // ── Poll Threads containers ──
-    let threadsReady = !hasThreadsInPost || (threadsState?.ready ?? false);
+    let threadsReady = !hasThreadsInPost || !!pollPrepErrors.threads || !threadsState || (threadsState.ready ?? false);
     if (!error && hasThreadsInPost && threadsState && !threadsState.ready) {
       const conn = connPlatforms?.find((c: Row) => c.platform === "threads");
       if (conn) {
@@ -902,7 +904,7 @@ export default async function CronPage({
     }
 
     // ── Poll Bluesky video processing ──
-    let bskyReady = !hasBskyInPost || (bskyState?.ready ?? true);
+    let bskyReady = !hasBskyInPost || !!pollPrepErrors.bluesky || (bskyState?.ready ?? true);
     if (!error && hasBskyInPost && bskyState && !bskyState.ready && bskyState.videoJobId) {
       const conn = connPlatforms?.find((c: Row) => c.platform === "bluesky");
       if (conn) {
