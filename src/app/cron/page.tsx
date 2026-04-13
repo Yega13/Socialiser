@@ -39,6 +39,7 @@ type PreparedContainers = {
   instagram?: IgContainerState;
   threads?: ThreadsContainerState;
   bluesky?: BskyPreparedState;
+  _errors?: Record<string, string>; // per-platform prep errors
 };
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -388,7 +389,7 @@ export default async function CronPage({
       .eq("is_active", true);
 
     const preparedContainers: PreparedContainers = {};
-    let fatalError: string | null = null;
+    const prepErrors: Record<string, string> = {}; // per-platform errors
     const hasIg = (post.platforms as string[]).includes("instagram");
 
     if (hasIg) {
@@ -396,15 +397,15 @@ export default async function CronPage({
         (c: Row) => c.platform === "instagram"
       );
       if (!conn) {
-        fatalError = "Instagram: Not connected";
+        prepErrors.instagram = "Not connected";
       } else if (!conn.platform_user_id) {
-        fatalError = "Instagram: Account ID missing. Reconnect.";
+        prepErrors.instagram = "Account ID missing. Reconnect.";
       } else if (!post.media_urls?.length) {
-        fatalError = "Instagram: No media files found";
+        prepErrors.instagram = "No media files found";
       } else {
         const accessToken = await getFreshToken(conn, "instagram");
         if (!accessToken) {
-          fatalError = "Instagram: Token refresh failed";
+          prepErrors.instagram = "Token refresh failed";
         } else {
           const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
           const igPostType =
@@ -422,11 +423,11 @@ export default async function CronPage({
           );
           const failedUrlIdx = resolvedItems.findIndex((item) => !item.url);
           if (failedUrlIdx !== -1) {
-            fatalError = `Instagram: Failed to resolve URL for item ${failedUrlIdx + 1}`;
+            prepErrors.instagram = `Failed to resolve URL for item ${failedUrlIdx + 1}`;
           }
           const items = resolvedItems;
 
-          if (!fatalError) {
+          if (!prepErrors.instagram) {
             if (items.length === 1) {
               // Single post/reel/story: create one container
               const params: Record<string, string> = {};
@@ -450,7 +451,7 @@ export default async function CronPage({
                 params
               );
               if (!container.id) {
-                fatalError = `Instagram: ${container.error}`;
+                prepErrors.instagram = container.error ?? "Container failed";
               } else {
                 preparedContainers.instagram = {
                   type: "single",
@@ -485,7 +486,7 @@ export default async function CronPage({
               );
               const failedItem = containerResults.find((r) => !r.id);
               if (failedItem) {
-                fatalError = `Instagram: Carousel item ${failedItem.index + 1}: ${failedItem.error}`;
+                prepErrors.instagram = `Carousel item ${failedItem.index + 1}: ${failedItem.error}`;
               } else {
                 const childIds = containerResults.map((r) => r.id as string);
                 preparedContainers.instagram = {
@@ -504,7 +505,7 @@ export default async function CronPage({
     }
 
     // ── Threads container preparation ──
-    const hasThreads = (post.platforms as string[]).includes("threads") && !fatalError;
+    const hasThreads = (post.platforms as string[]).includes("threads");
     if (hasThreads) {
       const conn = connPlatforms?.find((c: Row) => c.platform === "threads");
       if (!conn) {
@@ -589,7 +590,7 @@ export default async function CronPage({
     }
 
     // ── Bluesky media pre-upload ──
-    const hasBluesky = (post.platforms as string[]).includes("bluesky") && !fatalError;
+    const hasBluesky = (post.platforms as string[]).includes("bluesky");
     if (hasBluesky && post.media_urls && (post.media_urls as string[]).length > 0) {
       const conn = connPlatforms?.find((c: Row) => c.platform === "bluesky");
       if (conn) {
@@ -679,19 +680,37 @@ export default async function CronPage({
       }
     }
 
+    // Store per-platform errors for the PUBLISH step
+    if (Object.keys(prepErrors).length > 0) {
+      preparedContainers._errors = prepErrors;
+      log.push(`"${post.title}" prep errors: ${JSON.stringify(prepErrors)}`);
+    }
+
     // Determine if any platform needs container preparation
-    const needsPrep = hasIg || (hasThreads && preparedContainers.threads && !preparedContainers.threads.ready) ||
+    const needsPrep = (hasIg && !prepErrors.instagram) ||
+      (hasThreads && preparedContainers.threads && !preparedContainers.threads.ready) ||
       (hasBluesky && preparedContainers.bluesky && !preparedContainers.bluesky.ready);
 
-    if (fatalError) {
-      // Fatal error from IG — store as per-platform results so UI can display properly
+    // Check if ALL selected platforms failed during prepare
+    const allPlatformsFailed = (post.platforms as string[]).every((p: string) => {
+      if (p === "instagram") return !!prepErrors.instagram;
+      if (p === "youtube") return false; // YouTube has no prepare step
+      if (p === "threads") return !preparedContainers.threads && !prepErrors.instagram; // only if threads itself failed
+      if (p === "bluesky") return !preparedContainers.bluesky && !prepErrors.instagram;
+      return false;
+    }) && Object.keys(prepErrors).length > 0;
+
+    if (allPlatformsFailed) {
+      // Every platform failed — mark post as failed with per-platform errors
       const failResults: Record<string, { success: boolean; error?: string }> = {};
-      for (const p of post.platforms as string[]) failResults[p] = { success: false, error: fatalError };
+      for (const p of post.platforms as string[]) {
+        failResults[p] = { success: false, error: prepErrors[p] || "Preparation failed" };
+      }
       await supabase
         .from("scheduled_posts")
         .update({ status: "failed", results: failResults })
         .eq("id", post.id);
-      log.push(`"${post.title}": PREPARE FAILED — ${fatalError}`);
+      log.push(`"${post.title}": PREPARE FAILED — all platforms: ${JSON.stringify(prepErrors)}`);
     } else if (!needsPrep) {
       // All platforms ready or don't need containers — skip to prepared
       await supabase
@@ -969,9 +988,13 @@ export default async function CronPage({
 
     const containers = (post.prepared_containers ?? {}) as PreparedContainers;
     const results: Record<string, { success: boolean; error?: string }> = {};
+    const prepErrs = containers._errors ?? {};
 
     // Publish all platforms in parallel for speed
     const publishPromises = (post.platforms as string[]).map(async (platformId) => {
+      // Skip platforms that failed during preparation
+      if (prepErrs[platformId]) return { platformId, success: false, error: prepErrs[platformId] };
+
       const conn = connPlatforms?.find((c: Row) => c.platform === platformId);
       if (!conn) return { platformId, success: false, error: "Not connected" };
 
