@@ -504,7 +504,8 @@ export async function postToBlueskyServer(
   did: string,
   text: string,
   imageBlobs?: { $type: string; ref: { $link: string }; mimeType: string; size: number }[],
-  videoBlob?: { $type: string; ref: { $link: string }; mimeType: string; size: number } | null
+  videoBlob?: { $type: string; ref: { $link: string }; mimeType: string; size: number } | null,
+  pdsEndpoint?: string
 ): Promise<{ success: boolean; error?: string }> {
   try {
     const facets = detectFacets(text);
@@ -531,25 +532,31 @@ export async function postToBlueskyServer(
       };
     }
 
-    const res = await fetch(`${BSKY_API}/com.atproto.repo.createRecord`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessJwt}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        repo: did,
-        collection: "app.bsky.feed.post",
-        record,
-      }),
+    // Use the user's actual PDS (same one uploadBlob targeted). Fall back to bsky.social.
+    const host = pdsEndpoint?.replace(/\/$/, "") || BSKY_API.replace(/\/xrpc$/, "");
+    const createRecordUrl = `${host}/xrpc/com.atproto.repo.createRecord`;
+
+    const body = JSON.stringify({
+      repo: did,
+      collection: "app.bsky.feed.post",
+      record,
     });
+    const headers = {
+      Authorization: `Bearer ${accessJwt}`,
+      "Content-Type": "application/json",
+    };
 
-    if (!res.ok) {
+    // Up to 2 attempts — "Could not find blob" is often replication lag on the PDS
+    let lastErr = "";
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const res = await fetch(createRecordUrl, { method: "POST", headers, body });
+      if (res.ok) return { success: true };
       const err = await res.json().catch(() => ({}));
-      return { success: false, error: err?.message || `Post failed (${res.status})` };
+      lastErr = err?.message || `Post failed (${res.status})`;
+      if (!/could not find blob|BlobNotFound/i.test(lastErr)) break;
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 1200));
     }
-
-    return { success: true };
+    return { success: false, error: lastErr };
   } catch (err) {
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }

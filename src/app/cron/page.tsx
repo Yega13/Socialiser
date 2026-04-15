@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+import { resolveBlueskyPDS } from "@/lib/bluesky";
 
 export const dynamic = "force-dynamic";
 
@@ -626,7 +627,9 @@ export default async function CronPage({
       if (conn) {
         const bskyToken = await getFreshToken(conn, "bluesky");
         if (bskyToken) {
-          const BSKY_API = "https://bsky.social/xrpc";
+          // Resolve user's actual PDS — must match createRecord at PUBLISH time
+          const pdsHost = await resolveBlueskyPDS(conn.platform_user_id as string);
+          const BSKY_API = `${pdsHost}/xrpc`;
           const imageBlobs: Record<string, unknown>[] = [];
           let videoBlob: Record<string, unknown> | undefined;
           let videoJobId: string | undefined;
@@ -1077,7 +1080,9 @@ export default async function CronPage({
       if (platformId === "bluesky") {
         try {
           const postText = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
-          const BSKY_API = "https://bsky.social/xrpc";
+          // Same PDS used at PREPARE — uploadBlob and createRecord must share a host
+          const pdsHost = await resolveBlueskyPDS(conn.platform_user_id as string);
+          const BSKY_API = `${pdsHost}/xrpc`;
 
           // Detect facets (URLs, hashtags)
           const facets: { index: { byteStart: number; byteEnd: number }; features: Record<string, string>[] }[] = [];
@@ -1129,16 +1134,19 @@ export default async function CronPage({
             if (uploaded.length > 0) record.embed = { $type: "app.bsky.embed.images", images: uploaded };
           }
 
-          const postRes = await timedFetch(`${BSKY_API}/com.atproto.repo.createRecord`, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
-            body: JSON.stringify({ repo: conn.platform_user_id, collection: "app.bsky.feed.post", record }),
-          });
-          if (!postRes.ok) {
+          const body = JSON.stringify({ repo: conn.platform_user_id, collection: "app.bsky.feed.post", record });
+          const headers = { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" };
+          // Retry once on blob-lag — "Could not find blob" is usually transient PDS replication
+          let lastErr = "";
+          for (let attempt = 0; attempt < 2; attempt++) {
+            const postRes = await timedFetch(`${BSKY_API}/com.atproto.repo.createRecord`, { method: "POST", headers, body });
+            if (postRes.ok) return { platformId, success: true };
             const err = await postRes.json().catch(() => ({}));
-            return { platformId, success: false, error: err?.message || `Post failed (${postRes.status})` };
+            lastErr = err?.message || `Post failed (${postRes.status})`;
+            if (!/could not find blob|BlobNotFound/i.test(lastErr)) break;
+            if (attempt === 0) await new Promise((r) => setTimeout(r, 1200));
           }
-          return { platformId, success: true };
+          return { platformId, success: false, error: lastErr };
         } catch (err) {
           return { platformId, success: false, error: err instanceof Error ? err.message : String(err) };
         }

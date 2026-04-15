@@ -544,6 +544,9 @@ export default function ComposePage() {
         let bskyImageBlobs: BskyBlob[] | undefined;
         let bskyVideoBlob: BskyBlob | null = null;
 
+        // Resolve the user's PDS — uploadBlob and createRecord MUST hit the same host
+        const pdsEndpoint = await resolveBlueskyPDS(conn.platform_user_id!);
+
         if (mediaItems.length > 0) {
           const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
           if (videoItem) {
@@ -559,7 +562,7 @@ export default function ComposePage() {
               setPostingStatus("Uploading images to Bluesky...");
               const results = await Promise.all(imageItems.map(async (img) => {
                 const blob = await prepareImageForBluesky(img.file, img.cropOffset, filters);
-                const res = await fetch("https://bsky.social/xrpc/com.atproto.repo.uploadBlob", {
+                const res = await fetch(`${pdsEndpoint}/xrpc/com.atproto.repo.uploadBlob`, {
                   method: "POST",
                   headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "image/jpeg" },
                   body: blob,
@@ -576,7 +579,7 @@ export default function ComposePage() {
           }
         }
 
-        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImageBlobs, bskyVideoBlob)];
+        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImageBlobs, bskyVideoBlob, pdsEndpoint)];
       }
 
       return [platformId, { success: false, error: "Unknown platform" }];
