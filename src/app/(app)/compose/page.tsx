@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook } from "./actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
+import { resolveBlueskyPDS } from "@/lib/bluesky";
 import { moderatePost } from "@/lib/moderation";
 
 type ConnectedPlatform = {
@@ -569,6 +570,9 @@ export default function ComposePage() {
         let bskyImageBlobs: BskyBlob[] | undefined;
         let bskyVideoBlob: BskyBlob | null = null;
 
+        // Resolve the user's PDS — uploadBlob and createRecord MUST hit the same host
+        const pdsEndpoint = await resolveBlueskyPDS(conn.platform_user_id!);
+
         if (mediaItems.length > 0) {
           const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
           if (videoItem) {
@@ -584,7 +588,7 @@ export default function ComposePage() {
               setPostingStatus("Uploading images to Bluesky...");
               const results = await Promise.all(imageItems.map(async (img) => {
                 const blob = await prepareImageForBluesky(img.file, img.cropOffset, filters);
-                const res = await fetch("https://bsky.social/xrpc/com.atproto.repo.uploadBlob", {
+                const res = await fetch(`${pdsEndpoint}/xrpc/com.atproto.repo.uploadBlob`, {
                   method: "POST",
                   headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "image/jpeg" },
                   body: blob,
@@ -601,7 +605,7 @@ export default function ComposePage() {
           }
         }
 
-        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImageBlobs, bskyVideoBlob)];
+        return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImageBlobs, bskyVideoBlob, pdsEndpoint)];
       }
 
       return [platformId, { success: false, error: "Unknown platform" }];
@@ -639,7 +643,12 @@ export default function ComposePage() {
 
   async function handleSchedule() {
     if (!title.trim() || selected.length === 0 || !scheduleDate) return;
-    if (new Date(scheduleDate).getTime() - Date.now() < 4 * 60 * 1000) {
+    const scheduledMs = new Date(scheduleDate).getTime();
+    if (isNaN(scheduledMs) || scheduledMs <= Date.now()) {
+      setResults({ schedule: { success: false, error: "Can't schedule in the past." } });
+      return;
+    }
+    if (scheduledMs - Date.now() < 4 * 60 * 1000) {
       setResults({ schedule: { success: false, error: "Please schedule at least 5 minutes ahead." } });
       return;
     }
@@ -1190,7 +1199,16 @@ export default function ComposePage() {
                   <input
                     type="datetime-local"
                     value={scheduleDate}
-                    onChange={(e) => setScheduleDate(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val && new Date(val).getTime() <= Date.now()) {
+                        setResults({ schedule: { success: false, error: "Can't schedule in the past. Pick a time at least 5 minutes from now." } });
+                        setScheduleDate("");
+                        return;
+                      }
+                      setResults(null);
+                      setScheduleDate(val);
+                    }}
                     min={new Date(Date.now() + 6 * 60 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
                     className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
                   />
