@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer } from "./actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
+import { resolveBlueskyPDS } from "@/lib/bluesky";
 import { moderatePost } from "@/lib/moderation";
 
 type ConnectedPlatform = {
@@ -613,7 +614,12 @@ export default function ComposePage() {
 
   async function handleSchedule() {
     if (!title.trim() || selected.length === 0 || !scheduleDate) return;
-    if (new Date(scheduleDate).getTime() - Date.now() < 4 * 60 * 1000) {
+    const scheduledMs = new Date(scheduleDate).getTime();
+    if (isNaN(scheduledMs) || scheduledMs <= Date.now()) {
+      setResults({ schedule: { success: false, error: "Can't schedule in the past." } });
+      return;
+    }
+    if (scheduledMs - Date.now() < 4 * 60 * 1000) {
       setResults({ schedule: { success: false, error: "Please schedule at least 5 minutes ahead." } });
       return;
     }
@@ -1163,7 +1169,16 @@ export default function ComposePage() {
                   <input
                     type="datetime-local"
                     value={scheduleDate}
-                    onChange={(e) => setScheduleDate(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      if (val && new Date(val).getTime() <= Date.now()) {
+                        setResults({ schedule: { success: false, error: "Can't schedule in the past. Pick a time at least 5 minutes from now." } });
+                        setScheduleDate("");
+                        return;
+                      }
+                      setResults(null);
+                      setScheduleDate(val);
+                    }}
                     min={new Date(Date.now() + 6 * 60 * 1000 - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 16)}
                     className="w-full border border-[#0A0A0A] p-3 text-sm bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] outline-none focus:shadow-[4px_4px_0px_0px_#C8FF00] transition-all"
                   />
