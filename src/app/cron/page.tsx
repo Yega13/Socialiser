@@ -526,20 +526,33 @@ export default async function CronPage({
     if (hasThreads) {
       const conn = connPlatforms?.find((c: Row) => c.platform === "threads");
       if (!conn) {
-        // Non-fatal for threads — other platforms can still work
-        log.push(`"${post.title}" Threads: not connected (skipping)`);
+        prepErrors.threads = "Not connected";
+        log.push(`"${post.title}" Threads: not connected`);
       } else {
         const threadsToken = await getFreshToken(conn, "threads");
         if (!threadsToken) {
-          log.push(`"${post.title}" Threads: token refresh failed (skipping)`);
+          prepErrors.threads = "Token refresh failed — reconnect Threads";
+          log.push(`"${post.title}" Threads: token refresh failed`);
         } else {
           const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
           const THREADS_API = "https://graph.threads.net/v1.0";
 
           if (!post.media_urls || (post.media_urls as string[]).length === 0) {
-            // Text-only: no container needed, just mark ready
-            preparedContainers.threads = { type: "text", ready: true };
-            log.push(`"${post.title}" Threads: text-only, ready`);
+            // Text-only: create container NOW so PUBLISH is a single fast call
+            const cRes = await timedFetch(`${THREADS_API}/me/threads`, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({ media_type: "TEXT", text: caption, access_token: threadsToken }),
+            });
+            const cData = await cRes.json().catch(() => ({}));
+            if (cData.id) {
+              // Text containers have no processing wait — mark ready immediately
+              preparedContainers.threads = { type: "text", containerId: cData.id, ready: true };
+              log.push(`"${post.title}" Threads text container: ${cData.id}`);
+            } else {
+              prepErrors.threads = `Text container failed: ${cData.error?.message || "unknown"}`;
+              log.push(`"${post.title}" Threads text container failed: ${cData.error?.message || "unknown"}`);
+            }
           } else {
             // Resolve media URLs
             const resolvedItems = await Promise.all(
@@ -548,8 +561,11 @@ export default async function CronPage({
                 isVideo: (post.media_types as string[] | null)?.[i]?.startsWith("video/") ?? false,
               }))
             );
-
-            if (resolvedItems.length === 1) {
+            const failedUrlIdx = resolvedItems.findIndex((item) => !item.url);
+            if (failedUrlIdx !== -1) {
+              prepErrors.threads = `Failed to resolve media URL for item ${failedUrlIdx + 1}`;
+              log.push(`"${post.title}" Threads: ${prepErrors.threads}`);
+            } else if (resolvedItems.length === 1) {
               // Single media: create one container
               const params: Record<string, string> = { text: caption, access_token: threadsToken };
               if (resolvedItems[0].isVideo) {
@@ -564,17 +580,18 @@ export default async function CronPage({
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 body: new URLSearchParams(params),
               });
-              const cData = await cRes.json();
+              const cData = await cRes.json().catch(() => ({}));
               if (cData.id) {
                 preparedContainers.threads = { type: "single", containerId: cData.id, ready: false };
                 log.push(`"${post.title}" Threads single container: ${cData.id}`);
               } else {
+                prepErrors.threads = `Container failed: ${cData.error?.message || "unknown"}`;
                 log.push(`"${post.title}" Threads container failed: ${cData.error?.message || "unknown"}`);
               }
             } else {
-              // Carousel: create child containers
+              // Carousel: create all child containers in parallel
               const childResults = await Promise.all(
-                resolvedItems.filter(item => item.url).map(async (item) => {
+                resolvedItems.map(async (item) => {
                   const params: Record<string, string> = { is_carousel_item: "true", access_token: threadsToken };
                   if (item.isVideo) { params.media_type = "VIDEO"; params.video_url = item.url; }
                   else { params.media_type = "IMAGE"; params.image_url = item.url; }
@@ -583,20 +600,16 @@ export default async function CronPage({
                     headers: { "Content-Type": "application/x-www-form-urlencoded" },
                     body: new URLSearchParams(params),
                   });
-                  return cRes.json();
+                  return cRes.json().catch(() => ({}));
                 })
               );
-              const childIds: string[] = [];
-              let threadsFailed = false;
-              for (const cData of childResults) {
-                if (!cData.id) {
-                  log.push(`"${post.title}" Threads child failed: ${cData.error?.message || "unknown"}`);
-                  threadsFailed = true;
-                  break;
-                }
-                childIds.push(cData.id);
-              }
-              if (!threadsFailed && childIds.length > 0) {
+              const failedChildIdx = childResults.findIndex((r) => !r.id);
+              if (failedChildIdx !== -1) {
+                const errMsg = childResults[failedChildIdx]?.error?.message || "unknown";
+                prepErrors.threads = `Carousel item ${failedChildIdx + 1}: ${errMsg}`;
+                log.push(`"${post.title}" Threads child ${failedChildIdx + 1} failed: ${errMsg}`);
+              } else {
+                const childIds = childResults.map((r) => r.id as string);
                 preparedContainers.threads = { type: "carousel", childIds, ready: false };
                 log.push(`"${post.title}" Threads carousel: ${childIds.length} children created`);
               }
@@ -703,19 +716,18 @@ export default async function CronPage({
       log.push(`"${post.title}" prep errors: ${JSON.stringify(prepErrors)}`);
     }
 
-    // Determine if any platform needs container preparation
-    const needsPrep = (hasIg && !prepErrors.instagram) ||
-      (hasThreads && preparedContainers.threads && !preparedContainers.threads.ready) ||
-      (hasBluesky && preparedContainers.bluesky && !preparedContainers.bluesky.ready);
+    // Determine if any platform needs container preparation (polling)
+    const needsPrep =
+      (hasIg && !prepErrors.instagram && preparedContainers.instagram && !preparedContainers.instagram.ready) ||
+      (hasThreads && !prepErrors.threads && preparedContainers.threads && !preparedContainers.threads.ready) ||
+      (hasBluesky && !prepErrors.bluesky && preparedContainers.bluesky && !preparedContainers.bluesky.ready);
 
-    // Check if ALL selected platforms failed during prepare
+    // Check if EVERY selected platform failed during prepare
+    // (if only some failed, let the survivors proceed through POLL/PUBLISH)
     const allPlatformsFailed = (post.platforms as string[]).every((p: string) => {
-      if (p === "instagram") return !!prepErrors.instagram;
-      if (p === "youtube") return false; // YouTube has no prepare step
-      if (p === "threads") return !preparedContainers.threads && !prepErrors.instagram; // only if threads itself failed
-      if (p === "bluesky") return !preparedContainers.bluesky && !prepErrors.instagram;
-      return false;
-    }) && Object.keys(prepErrors).length > 0;
+      if (p === "youtube") return false; // YouTube has no prepare step, can never fail here
+      return !!prepErrors[p];
+    });
 
     if (allPlatformsFailed) {
       // Every platform failed — mark post as failed with per-platform errors
@@ -788,7 +800,10 @@ export default async function CronPage({
     const hasBskyInPost = (post.platforms as string[]).includes("bluesky");
 
     // Check if PREPARE didn't finish at all (no containers AND no errors — means crash)
-    if (hasIgInPost && !igState && !threadsState && !bskyState && Object.keys(pollPrepErrors).length === 0) {
+    // Applies to ANY post regardless of which platforms — Threads-only / Bluesky-only included
+    const hasAnyState = !!igState || !!threadsState || !!bskyState;
+    const needsAnyPrep = hasIgInPost || hasThreadsInPost || hasBskyInPost;
+    if (needsAnyPrep && !hasAnyState && Object.keys(pollPrepErrors).length === 0) {
       await supabase.from("scheduled_posts").update({ status: "pending" }).eq("id", post.id);
       log.push(`"${post.title}": containers missing, reset to pending for retry`);
       continue;
@@ -846,6 +861,7 @@ export default async function CronPage({
     // ── Poll Threads containers ──
     let threadsReady = !hasThreadsInPost || !!pollPrepErrors.threads || !threadsState || (threadsState.ready ?? false);
     if (!error && hasThreadsInPost && threadsState && !threadsState.ready) {
+      try {
       const conn = connPlatforms?.find((c: Row) => c.platform === "threads");
       if (conn) {
         const accessToken = await getFreshToken(conn, "threads");
@@ -921,6 +937,12 @@ export default async function CronPage({
         }
       } else {
         threadsReady = true; // Not connected, skip
+      }
+      } catch (err) {
+        // Threads POLL failure is non-fatal — mark done, other platforms proceed
+        log.push(`"${post.title}" Threads POLL exception: ${err instanceof Error ? err.message : String(err)}`);
+        containers.threads = { ...threadsState, ready: true };
+        threadsReady = true;
       }
     }
 
@@ -1033,39 +1055,22 @@ export default async function CronPage({
         return { platformId, ...r };
       }
 
-      // ── Publish Threads (one API call — container ready) ──
+      // ── Publish Threads (one API call — container ready from PREPARE) ──
       if (platformId === "threads") {
         const tState = containers.threads;
+        if (!tState?.containerId) return { platformId, success: false, error: "No prepared container" };
         const THREADS_API = "https://graph.threads.net/v1.0";
-
-        if (tState?.type === "text") {
-          // Text-only: create container + publish (fast, no media processing)
-          const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
-          const cRes = await timedFetch(`${THREADS_API}/me/threads`, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({ media_type: "TEXT", text: caption, access_token: accessToken }),
-          });
-          const cData = await cRes.json();
-          if (!cData.id) return { platformId, success: false, error: cData.error?.message || "Text container failed" };
+        try {
           const pRes = await timedFetch(`${THREADS_API}/me/threads_publish`, {
             method: "POST",
             headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams({ creation_id: cData.id, access_token: accessToken }),
+            body: new URLSearchParams({ creation_id: tState.containerId, access_token: accessToken }),
           });
-          const pData = await pRes.json();
-          return pData.id ? { platformId, success: true } : { platformId, success: false, error: pData.error?.message || "Publish failed" };
+          const pData = await pRes.json().catch(() => ({}));
+          return pData.id ? { platformId, success: true } : { platformId, success: false, error: pData.error?.message || `Publish failed (${pRes.status})` };
+        } catch (err) {
+          return { platformId, success: false, error: err instanceof Error ? err.message : String(err) };
         }
-
-        if (!tState?.containerId) return { platformId, success: false, error: "No prepared container" };
-        // Single or carousel: container is ready, just publish
-        const pRes = await timedFetch(`${THREADS_API}/me/threads_publish`, {
-          method: "POST",
-          headers: { "Content-Type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams({ creation_id: tState.containerId, access_token: accessToken }),
-        });
-        const pData = await pRes.json();
-        return pData.id ? { platformId, success: true } : { platformId, success: false, error: pData.error?.message || "Publish failed" };
       }
 
       // ── Publish Bluesky (one API call — blobs pre-uploaded) ──
