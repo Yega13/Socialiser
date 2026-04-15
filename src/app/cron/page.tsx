@@ -354,6 +354,19 @@ export default async function CronPage({
   }
 
   // ═══════════════════════════════════════════════════════════════════════
+  // PRIORITY: Check if any prepared posts are due NOW — if so, skip to PUBLISH
+  // ═══════════════════════════════════════════════════════════════════════
+
+  const { count: urgentCount } = await supabase
+    .from("scheduled_posts")
+    .select("*", { count: "exact", head: true })
+    .eq("status", "prepared")
+    .lte("scheduled_at", now.toISOString());
+  const hasUrgentPublish = (urgentCount ?? 0) > 0;
+  if (hasUrgentPublish)
+    log.push(`PRIORITY: ${urgentCount} prepared post(s) due NOW, skipping PREPARE/POLL`);
+
+  // ═══════════════════════════════════════════════════════════════════════
   // STEP 1: PREPARE (pending → preparing)
   // Create IG containers for posts due in the next 20 minutes.
   // Fast: just creates containers (kicks off IG processing), then done.
@@ -369,6 +382,10 @@ export default async function CronPage({
     .limit(10);
 
   for (const post of pendingPosts ?? []) {
+    if (hasUrgentPublish) {
+      log.push("PREPARE: urgent publish pending, deferring PREPARE");
+      break;
+    }
     if (Date.now() - cronStart > 15_000) {
       log.push("PREPARE: time limit (15s), deferring remaining");
       break;
@@ -743,6 +760,10 @@ export default async function CronPage({
     .limit(20);
 
   for (const post of preparingPosts ?? []) {
+    if (hasUrgentPublish) {
+      log.push("POLL: urgent publish pending, deferring POLL");
+      break;
+    }
     if (Date.now() - cronStart > 20_000) {
       log.push("POLL: time limit (20s), deferring remaining");
       break;

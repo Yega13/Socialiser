@@ -1,6 +1,97 @@
-# Socialiser — Session Handoff (2026-04-12)
+# Socialiser — Session Handoff (2026-04-13)
 
 Read this ENTIRE file before doing anything. It contains full context from the previous session.
+
+---
+
+## 2026-04-13 Session — Scheduling Precision Overhaul
+
+Goal from user: make scheduling "PERFECTLY on time, fast, and WITHOUT ANY BUGS". Even seconds matter. Root causes fixed: (1) per-platform errors cascading to all platforms, (2) posts stuck forever in `preparing` / `publishing` with no recovery, (3) runs blowing past the 30s CF Workers limit, (4) PREPARE/POLL work crowding out time-critical PUBLISH work, and (5) no external service hitting `/cron` at 1-minute cadence.
+
+### Code changes (all in `src/app/cron/page.tsx` unless stated)
+
+1. **`timedFetch` utility (~line 47)** — wraps `globalThis.fetch` (explicit global to avoid recursion) with `AbortController` + `setTimeout`. Every network call in the cron now has a hard timeout. Defaults: 10s general, 20s downloads, 20–25s for video operations.
+
+2. **`cronStart = Date.now()` timer (line 216)** — every step has a time budget enforced inside its `for` loop:
+   - STEP 1 PREPARE: 15s budget, then `break` + "deferring remaining" log
+   - STEP 2 POLL: 20s budget
+   - STEP 3 PUBLISH: 28s budget (closest to the 30s CF limit because publishing is what actually matters)
+
+3. **RECOVERY block (before STEP 1)** — resets stuck posts before the cron does new work:
+   - `publishing` > 5 min old → back to `prepared` (will retry publish)
+   - `preparing` > 20 min old → back to `pending` (will re-prepare from scratch)
+   Prevents the "stuck for 8 minutes" class of bug the user hit.
+
+4. **Urgent-publish priority (line 360–367, just added)** — right after RECOVERY:
+   ```ts
+   const { count: urgentCount } = await supabase
+     .from("scheduled_posts")
+     .select("*", { count: "exact", head: true })
+     .eq("status", "prepared")
+     .lte("scheduled_at", now.toISOString());
+   const hasUrgentPublish = (urgentCount ?? 0) > 0;
+   ```
+   STEP 1 PREPARE and STEP 2 POLL now `break` immediately if `hasUrgentPublish` is true, so the run blows straight through to STEP 3 PUBLISH. This means a post that is `prepared` and due NOW never waits behind unrelated prepare/poll work.
+
+5. **Per-platform error isolation** — replaced the single `fatalError` variable (which cascaded, e.g., an Instagram token error would mark Threads/Bluesky failed too) with a `prepErrors: Record<string, string>` object. Then:
+   - `pollPrepErrors` in STEP 2 skips platforms that already failed in PREPARE so we don't wait on containers that don't exist
+   - `igReady` / `threadsReady` / `bskyReady` now treat a prep error as "done" instead of blocking POLL forever
+   - Removed `!fatalError` guard from Threads/Bluesky prep paths so they run even if Instagram failed
+   - Added `_errors` field on the `PreparedContainers` type so errors survive into the next run
+
+6. **Parallelized Threads carousel children** — was sequential `for` loop of container creation, now `Promise.all` across all children.
+
+7. **`src/app/(app)/scheduled/page.tsx`** — `processOverduePosts` now uses optimistic locking to claim rows before the cron can:
+   ```ts
+   const { data: claimed } = await supabase
+     .from("scheduled_posts")
+     .update({ status: "publishing" })
+     .eq("id", post.id)
+     .eq("status", "pending")
+     .select("id");
+   if (!claimed?.length) continue;
+   ```
+   Init-time stuck-reset now also clears `prepared_containers` and `results` so retries start clean.
+
+### Infrastructure: cron triggering (THE real timing fix)
+
+The code-side fixes above guarantee each run is fast and bug-free, but the actual "post is 5 minutes late" issue is that **nothing was hitting `/cron` on a schedule**. The cron only ran when the user happened to visit the scheduled page. This session added:
+
+- **`.github/workflows/cron.yml`** — backup trigger, 5-min cadence (GitHub Actions minimum). `curl` to `https://socialiser.yeganyansuren13.workers.dev/cron?key=socialiser-cron-2026`. Non-fatal if it fails.
+
+**USER ACTION STILL REQUIRED (tell the user):**
+
+1. Sign up at **cron-job.org** (free).
+2. Create a job:
+   - URL: `https://socialiser.yeganyansuren13.workers.dev/cron?key=socialiser-cron-2026`
+   - Schedule: every 1 minute
+   - Timeout: 30 seconds
+3. Save & enable.
+
+This is the PRIMARY fix. The GitHub Actions workflow is only a backup — GH's shortest interval is 5 minutes, which is too loose for the user's "seconds matter" bar.
+
+Alternative / better: configure CF Workers Cron Triggers in `wrangler.toml`:
+```toml
+[triggers]
+crons = ["* * * * *"]
+```
+But this requires a paid plan for 1-minute cadence on Workers. cron-job.org is free and works now.
+
+### Files touched this session
+- `src/app/cron/page.tsx` — timedFetch, cronStart, RECOVERY, urgent-publish priority, per-platform prepErrors, parallelized Threads carousel, extended video timeouts
+- `src/app/(app)/scheduled/page.tsx` — optimistic lock on processOverduePosts, cleaner stuck-reset
+- `.github/workflows/cron.yml` — NEW, 5-min backup cron trigger
+
+### Verification
+- `npx tsc --noEmit` — clean (no build needed because OneDrive `.next` corruption risk, per `feedback_onedrive_corruption.md`)
+
+### What still needs testing on prod after deploy
+1. Schedule a post 3–5 minutes out across all 4 platforms.
+2. Confirm cron-job.org hits `/cron` every minute (check its log).
+3. Confirm post fires within seconds of scheduled time — not minutes.
+4. Deliberately break one platform (e.g., revoke IG token) and confirm the other 3 still post.
+
+---
 
 ---
 

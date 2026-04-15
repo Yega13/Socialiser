@@ -1,0 +1,20 @@
+name: Scheduled Cron Trigger
+
+# Backup cron trigger (GitHub Actions minimum is 5 minutes).
+# Primary triggering should be external (cron-job.org) at 1-minute intervals
+# for tight scheduling precision. This acts as a fallback.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  hit-cron:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger cron endpoint
+        run: |
+          curl -fsS --max-time 30 \
+            "https://socialiser.yeganyansuren13.workers.dev/cron?key=socialiser-cron-2026" \
+            || echo "cron trigger failed (non-fatal)"
