@@ -64,11 +64,11 @@ export const PLATFORMS = [
   {
     id: "facebook",
     name: "Facebook",
-    description: "Share posts & stories",
+    description: "Post to your Page",
     icon: "fb",
     color: "#1877F2",
     textColor: "#F9F9F7",
-    comingSoon: true,
+    comingSoon: false,
   },
   {
     id: "vk",

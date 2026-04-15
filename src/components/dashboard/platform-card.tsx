@@ -152,6 +152,20 @@ export function PlatformCard({
         state: user.id,
       });
       window.location.href = `https://threads.net/oauth/authorize?${params}`;
+    } else if (platform.id === "facebook") {
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { window.location.href = "/login"; return; }
+
+      const params = new URLSearchParams({
+        client_id: "1592813721786301",
+        redirect_uri: `${window.location.origin}/facebook-callback`,
+        response_type: "code",
+        scope: "pages_show_list,pages_manage_posts,pages_read_engagement,pages_manage_metadata,pages_read_user_content,public_profile",
+        state: user.id,
+      });
+      window.location.href = `https://www.facebook.com/v23.0/dialog/oauth?${params}`;
     } else if (platform.id === "bluesky") {
       setShowBlueskyForm(true);
       setBskyError("");

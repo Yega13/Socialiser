@@ -1144,6 +1144,98 @@ export default async function CronPage({
         }
       }
 
+      // ── Publish Facebook Page post (no container needed — direct API call) ──
+      if (platformId === "facebook") {
+        if (!conn.platform_user_id) return { platformId, success: false, error: "Page ID missing" };
+        const FB_API = "https://graph.facebook.com/v23.0";
+        const message = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+        const pageId = conn.platform_user_id as string;
+
+        try {
+          if (!post.media_urls || (post.media_urls as string[]).length === 0) {
+            // Text-only post
+            const r = await timedFetch(`${FB_API}/${pageId}/feed`, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({ access_token: accessToken, message }),
+            }, 15_000);
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || d.error || (!d.id && !d.post_id)) {
+              return { platformId, success: false, error: d.error?.message || `HTTP ${r.status}` };
+            }
+            return { platformId, success: true };
+          }
+
+          // Resolve all media URLs to signed URLs
+          const resolvedItems = await Promise.all(
+            (post.media_urls as string[]).map(async (stored, i) => ({
+              url: await resolve(stored),
+              isVideo: (post.media_types as string[] | null)?.[i]?.startsWith("video/") ?? false,
+            }))
+          );
+          const failedIdx = resolvedItems.findIndex((it) => !it.url);
+          if (failedIdx !== -1) return { platformId, success: false, error: `Failed to resolve URL for item ${failedIdx + 1}` };
+
+          if (resolvedItems.length === 1) {
+            const item = resolvedItems[0];
+            const endpoint = item.isVideo ? `${FB_API}/${pageId}/videos` : `${FB_API}/${pageId}/photos`;
+            const params: Record<string, string> = { access_token: accessToken };
+            if (item.isVideo) { params.file_url = item.url; if (message) params.description = message; }
+            else { params.url = item.url; if (message) params.caption = message; }
+
+            const r = await timedFetch(endpoint, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams(params),
+            }, item.isVideo ? 25_000 : 15_000);
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok || d.error || (!d.id && !d.post_id)) {
+              return { platformId, success: false, error: d.error?.message || `HTTP ${r.status}` };
+            }
+            return { platformId, success: true };
+          }
+
+          // Multi-photo: only photos supported (FB doesn't allow image+video mix in single post)
+          if (resolvedItems.some((it) => it.isVideo)) {
+            return { platformId, success: false, error: "Facebook multi-post cannot mix images and videos" };
+          }
+
+          // Upload all photos as unpublished in parallel
+          const uploadResults = await Promise.all(
+            resolvedItems.map(async (item, i) => {
+              const r = await timedFetch(`${FB_API}/${pageId}/photos`, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: new URLSearchParams({ access_token: accessToken, url: item.url, published: "false" }),
+              }, 15_000);
+              const d = await r.json().catch(() => ({}));
+              if (!r.ok || d.error || !d.id) return { id: null, error: d.error?.message || `HTTP ${r.status}`, index: i };
+              return { id: d.id as string, error: null, index: i };
+            })
+          );
+          const failedUpload = uploadResults.find((u) => !u.id);
+          if (failedUpload) return { platformId, success: false, error: `Photo ${failedUpload.index + 1}: ${failedUpload.error}` };
+
+          // Publish feed post with all attached_media
+          const feedParams: Record<string, string> = { access_token: accessToken, message };
+          uploadResults.forEach((u, i) => {
+            feedParams[`attached_media[${i}]`] = JSON.stringify({ media_fbid: u.id });
+          });
+          const fr = await timedFetch(`${FB_API}/${pageId}/feed`, {
+            method: "POST",
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            body: new URLSearchParams(feedParams),
+          }, 15_000);
+          const fd = await fr.json().catch(() => ({}));
+          if (!fr.ok || fd.error || !fd.id) {
+            return { platformId, success: false, error: fd.error?.message || `Feed HTTP ${fr.status}` };
+          }
+          return { platformId, success: true };
+        } catch (err) {
+          return { platformId, success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+
       // ── Upload to YouTube (no container system — upload happens at publish) ──
       if (platformId === "youtube") {
         const videoIndex = (post.media_types as string[] | null)?.findIndex((t: string) => t.startsWith("video/"));

@@ -12,6 +12,8 @@ import {
   postToThreadsServer,
   postCarouselToThreads,
   postToBlueskyServer,
+  postToFacebookServer,
+  postCarouselToFacebook,
 } from "@/app/(app)/compose/actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
@@ -408,6 +410,46 @@ export default function ScheduledPage() {
               } else {
                 results[platformId] = await postCarouselToThreads(
                   accessToken, conn.platform_user_id, caption, items
+                );
+              }
+            }
+          }
+        }
+
+        // ── Facebook ──
+        if (platformId === "facebook") {
+          if (!conn.platform_user_id) {
+            results[platformId] = { success: false, error: "Facebook Page ID missing. Reconnect." };
+            continue;
+          }
+          setProcessingStatus("Posting to Facebook...");
+          const message = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+
+          if (!post.media_urls || (post.media_urls as string[]).length === 0) {
+            results[platformId] = await postToFacebookServer(accessToken, conn.platform_user_id, message);
+          } else {
+            const items: { url: string; isVideo: boolean }[] = [];
+            let urlErr = false;
+            for (let i = 0; i < (post.media_urls as string[]).length; i++) {
+              const stored = (post.media_urls as string[])[i];
+              const mimeType = (post.media_types as string[] | null)?.[i] ?? "image/jpeg";
+              const isVideo = mimeType.startsWith("video/");
+              const signedUrl = await resolveToSignedUrl(supabase, stored);
+              if (!signedUrl) {
+                results[platformId] = { success: false, error: `Failed to get URL for file ${i + 1}` };
+                urlErr = true;
+                break;
+              }
+              items.push({ url: signedUrl, isVideo });
+            }
+            if (!urlErr) {
+              if (items.length === 1) {
+                results[platformId] = await postToFacebookServer(
+                  accessToken, conn.platform_user_id, message, items[0].url, items[0].isVideo
+                );
+              } else {
+                results[platformId] = await postCarouselToFacebook(
+                  accessToken, conn.platform_user_id, message, items
                 );
               }
             }

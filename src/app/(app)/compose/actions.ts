@@ -453,6 +453,129 @@ export async function postCarouselToThreads(
   }
 }
 
+// ── Facebook Pages ───────────────────────────────────────────────
+
+const FB_API = "https://graph.facebook.com/v23.0";
+
+// Single text or photo or video post to a Facebook Page.
+// Page tokens never expire, so no refresh function needed.
+export async function postToFacebookServer(
+  pageAccessToken: string,
+  pageId: string,
+  text: string,
+  mediaUrl?: string,
+  isVideo?: boolean
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    let endpoint: string;
+    const params: Record<string, string> = { access_token: pageAccessToken };
+
+    if (mediaUrl && isVideo) {
+      endpoint = `${FB_API}/${pageId}/videos`;
+      params.file_url = mediaUrl;
+      if (text) params.description = text;
+    } else if (mediaUrl) {
+      endpoint = `${FB_API}/${pageId}/photos`;
+      params.url = mediaUrl;
+      if (text) params.caption = text;
+    } else {
+      endpoint = `${FB_API}/${pageId}/feed`;
+      params.message = text;
+    }
+
+    const res = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(params),
+    });
+    const data = await res.json().catch(() => ({}));
+
+    if (!res.ok || data.error) {
+      const e = data.error;
+      const detail = e
+        ? `[${e.code}${e.error_subcode ? `/${e.error_subcode}` : ""}] ${e.message} (type: ${e.type})`
+        : `HTTP ${res.status}`;
+      return { success: false, error: detail };
+    }
+    if (!data.id && !data.post_id) {
+      return { success: false, error: `Unexpected response: ${JSON.stringify(data).slice(0, 200)}` };
+    }
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+// Multi-photo post (Facebook's equivalent of a carousel — single feed post with N attached photos).
+// Step 1: upload each photo with published=false → get media_fbid
+// Step 2: POST /feed with message + attached_media[i]={"media_fbid":"..."}
+export async function postCarouselToFacebook(
+  pageAccessToken: string,
+  pageId: string,
+  text: string,
+  items: { url: string; isVideo: boolean }[]
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const photos = items.filter((i) => !i.isVideo);
+    if (photos.length < 2) {
+      return { success: false, error: "Facebook multi-photo post requires 2+ images" };
+    }
+    if (photos.length !== items.length) {
+      return { success: false, error: "Facebook multi-photo posts cannot mix images and videos" };
+    }
+
+    // Step 1: upload all photos in parallel as unpublished
+    const uploadResults = await Promise.all(
+      photos.map(async (item, i) => {
+        const res = await fetch(`${FB_API}/${pageId}/photos`, {
+          method: "POST",
+          headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({
+            access_token: pageAccessToken,
+            url: item.url,
+            published: "false",
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || data.error || !data.id) {
+          const e = data.error;
+          const detail = e ? `[${e.code}] ${e.message}` : `HTTP ${res.status}`;
+          return { id: null, error: `Photo ${i + 1}: ${detail}` };
+        }
+        return { id: data.id as string, error: null };
+      })
+    );
+    const failed = uploadResults.find((r) => !r.id);
+    if (failed) return { success: false, error: failed.error ?? "Photo upload failed" };
+
+    // Step 2: publish feed post with all attached media
+    const feedParams: Record<string, string> = {
+      access_token: pageAccessToken,
+      message: text,
+    };
+    uploadResults.forEach((r, i) => {
+      feedParams[`attached_media[${i}]`] = JSON.stringify({ media_fbid: r.id });
+    });
+
+    const feedRes = await fetch(`${FB_API}/${pageId}/feed`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams(feedParams),
+    });
+    const feedData = await feedRes.json().catch(() => ({}));
+    if (!feedRes.ok || feedData.error) {
+      const e = feedData.error;
+      const detail = e ? `[${e.code}] ${e.message}` : `HTTP ${feedRes.status}`;
+      return { success: false, error: `Publish: ${detail}` };
+    }
+    if (!feedData.id) return { success: false, error: `Unexpected feed response: ${JSON.stringify(feedData).slice(0, 200)}` };
+
+    return { success: true };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 // ── Bluesky (AT Protocol) ────────────────────────────────────────
 
 const BSKY_API = "https://bsky.social/xrpc";

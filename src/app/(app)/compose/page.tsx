@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook } from "./actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
 import { moderatePost } from "@/lib/moderation";
@@ -328,7 +328,7 @@ export default function ComposePage() {
     mediaItems.forEach((item) => URL.revokeObjectURL(item.preview));
 
     const newItems: MediaItem[] = [];
-    const maxFiles = instagramSelected ? 10 : threadsSelected ? 20 : blueskySelected ? 4 : 1;
+    const maxFiles = threadsSelected ? 20 : instagramSelected ? 10 : facebookSelected ? 10 : blueskySelected ? 4 : 1;
     const filesToAdd = Array.from(files).slice(0, maxFiles);
 
     for (const file of filesToAdd) {
@@ -419,8 +419,8 @@ export default function ComposePage() {
       return { token: accessToken };
     }
 
-    // Pre-upload media to Supabase once (shared by Instagram + Threads)
-    const supabaseNeeded = (selected.includes("instagram") || selected.includes("threads")) && mediaItems.length > 0;
+    // Pre-upload media to Supabase once (shared by Instagram + Threads + Facebook)
+    const supabaseNeeded = (selected.includes("instagram") || selected.includes("threads") || selected.includes("facebook")) && mediaItems.length > 0;
     let sharedMediaUrls: { url: string; isVideo: boolean }[] | null = null;
     let sharedUploadError: string | null = null;
 
@@ -533,6 +533,32 @@ export default function ComposePage() {
           }
         } catch (err) {
           return [platformId, { success: false, error: `[threads-crash] ${err instanceof Error ? err.message : String(err)}` }];
+        }
+      }
+
+      // ── Facebook ──
+      if (platformId === "facebook") {
+        if (!conn.platform_user_id) return [platformId, { success: false, error: "Facebook Page ID missing. Reconnect." }];
+        const message = `${title}${description ? "\n\n" + description : ""}`;
+
+        try {
+          if (mediaItems.length === 0) {
+            return [platformId, await postToFacebookServer(accessToken, conn.platform_user_id, message)];
+          }
+          if (sharedUploadError) return [platformId, { success: false, error: sharedUploadError }];
+          if (!sharedMediaUrls) return [platformId, { success: false, error: "Media upload failed" }];
+
+          if (sharedMediaUrls.length === 1) {
+            return [platformId, await postToFacebookServer(
+              accessToken, conn.platform_user_id, message, sharedMediaUrls[0].url, sharedMediaUrls[0].isVideo
+            )];
+          }
+          // Multi-photo (Facebook doesn't support image+video mix; postCarouselToFacebook will error out cleanly if mixed)
+          return [platformId, await postCarouselToFacebook(
+            accessToken, conn.platform_user_id, message, sharedMediaUrls
+          )];
+        } catch (err) {
+          return [platformId, { success: false, error: err instanceof Error ? err.message : String(err) }];
         }
       }
 
@@ -728,8 +754,9 @@ export default function ComposePage() {
   const instagramConnected = connected.find((c) => c.platform === "instagram");
   const blueskySelected = selected.includes("bluesky");
   const threadsSelected = selected.includes("threads");
+  const facebookSelected = selected.includes("facebook");
   const needsMedia = youtubeSelected || instagramSelected;
-  const showMediaPicker = needsMedia || blueskySelected || threadsSelected;
+  const showMediaPicker = needsMedia || blueskySelected || threadsSelected || facebookSelected;
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const hasVideo = mediaItems.some((m) => m.file.type.startsWith("video/"));
   const canPost =
