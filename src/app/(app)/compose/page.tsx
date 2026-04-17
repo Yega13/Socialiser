@@ -769,16 +769,26 @@ export default function ComposePage() {
   const showMediaPicker = needsMedia || blueskySelected || threadsSelected || facebookSelected;
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const hasVideo = mediaItems.some((m) => m.file.type.startsWith("video/"));
+  const videoCount = mediaItems.filter((m) => m.file.type.startsWith("video/")).length;
+  const imageCount = mediaItems.filter((m) => m.file.type.startsWith("image/")).length;
+  const facebookMixedMedia = facebookSelected && videoCount > 0 && imageCount > 0;
+  const facebookMultipleVideos = facebookSelected && videoCount > 1;
   const canPost =
     !isPosting &&
     selected.length > 0 &&
     title.trim().length > 0 &&
     (!needsMedia || mediaItems.length > 0) &&
     (!youtubeSelected || hasVideo) &&
+    !facebookMixedMedia &&
+    !facebookMultipleVideos &&
     (!scheduleEnabled || scheduleDate.length > 0);
   const postBlockReason =
     youtubeSelected && !hasVideo && mediaItems.length > 0
       ? "YouTube requires video — deselect YouTube or upload a video"
+      : facebookMixedMedia
+      ? "Facebook can't mix images and videos — remove one type or deselect Facebook"
+      : facebookMultipleVideos
+      ? "Facebook supports only one video per post — remove extra videos or deselect Facebook"
       : scheduleEnabled && !scheduleDate
       ? "Pick a date & time to schedule"
       : null;
