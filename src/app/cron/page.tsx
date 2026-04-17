@@ -36,10 +36,22 @@ type BskyPreparedState = {
   ready: boolean;
 };
 
+type FbContainerState = {
+  type: "text" | "photos" | "video";
+  // photos: indexed by media position; null = not yet uploaded (retry next run)
+  photoIds?: (string | null)[];
+  // video: the FB video ID (set after upload succeeds)
+  videoFbId?: string;
+  // video: whether FB has finished processing it
+  videoProcessed?: boolean;
+  ready: boolean;
+};
+
 type PreparedContainers = {
   instagram?: IgContainerState;
   threads?: ThreadsContainerState;
   bluesky?: BskyPreparedState;
+  facebook?: FbContainerState;
   _errors?: Record<string, string>; // per-platform prep errors
 };
 
@@ -713,6 +725,111 @@ export default async function CronPage({
       }
     }
 
+    // ── Facebook preparation ──
+    // Move all expensive work (photo/video upload) out of PUBLISH into PREPARE.
+    // PUBLISH then becomes a single fast /feed or ?published=true call.
+    const hasFacebook = (post.platforms as string[]).includes("facebook");
+    if (hasFacebook) {
+      const conn = connPlatforms?.find((c: Row) => c.platform === "facebook");
+      if (!conn) {
+        prepErrors.facebook = "Not connected";
+      } else if (!conn.platform_user_id) {
+        prepErrors.facebook = "Page ID missing. Reconnect.";
+      } else {
+        const fbToken = conn.access_token as string;
+        const pageId = conn.platform_user_id as string;
+        const FB_API = "https://graph.facebook.com/v23.0";
+
+        if (!post.media_urls || (post.media_urls as string[]).length === 0) {
+          // Text-only — no upload needed
+          preparedContainers.facebook = { type: "text", ready: true };
+          log.push(`"${post.title}" Facebook text: ready`);
+        } else {
+          const mediaTypes = (post.media_types as string[] | null) ?? [];
+          const hasVideoMedia = mediaTypes.some((t) => t.startsWith("video/"));
+          const allVideos = mediaTypes.every((t) => t.startsWith("video/"));
+
+          if ((post.media_urls as string[]).length > 1 && hasVideoMedia) {
+            prepErrors.facebook = "Facebook multi-post cannot mix images and videos";
+          } else if ((post.media_urls as string[]).length > 1 && mediaTypes.filter((t) => t.startsWith("video/")).length > 1) {
+            prepErrors.facebook = "Facebook supports only one video per post";
+          } else if ((post.media_urls as string[]).length === 1 && allVideos) {
+            // Single video — upload to FB as draft
+            const stored = (post.media_urls as string[])[0];
+            const videoUrl = await resolve(stored);
+            if (!videoUrl) {
+              prepErrors.facebook = "Failed to resolve video URL";
+            } else {
+              const description = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+              try {
+                const r = await timedFetch(`${FB_API}/${pageId}/videos`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                  body: new URLSearchParams({
+                    access_token: fbToken,
+                    file_url: videoUrl,
+                    published: "false",
+                    description,
+                  }),
+                }, 25_000);
+                const d = await r.json().catch(() => ({}));
+                if (r.ok && d.id) {
+                  preparedContainers.facebook = {
+                    type: "video",
+                    videoFbId: d.id as string,
+                    videoProcessed: false,
+                    ready: false,
+                  };
+                  log.push(`"${post.title}" Facebook video uploaded: ${d.id}`);
+                } else if (d.error && (d.error.code === 190 || d.error.code === 200)) {
+                  // Permanent errors — 190: invalid token, 200: permission
+                  prepErrors.facebook = `[${d.error.code}] ${d.error.message}`;
+                } else {
+                  // Transient — leave state undefined, POLL will retry
+                  preparedContainers.facebook = { type: "video", ready: false };
+                  log.push(`"${post.title}" Facebook video upload transient fail: ${d.error?.message || `HTTP ${r.status}`}`);
+                }
+              } catch (err) {
+                // Abort or network — leave pending, POLL retries
+                preparedContainers.facebook = { type: "video", ready: false };
+                log.push(`"${post.title}" Facebook video upload threw: ${err instanceof Error ? err.message : String(err)}`);
+              }
+            }
+          } else {
+            // Photos (one or more) — upload all in parallel as unpublished
+            const resolved = await Promise.all(
+              (post.media_urls as string[]).map((stored) => resolve(stored))
+            );
+            const photoIds: (string | null)[] = new Array(resolved.length).fill(null);
+            const uploadTasks = resolved.map(async (url, i) => {
+              if (!url) return;
+              try {
+                const r = await timedFetch(`${FB_API}/${pageId}/photos`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                  body: new URLSearchParams({
+                    access_token: fbToken,
+                    url,
+                    published: "false",
+                  }),
+                }, 20_000);
+                const d = await r.json().catch(() => ({}));
+                if (r.ok && d.id) photoIds[i] = d.id as string;
+              } catch { /* leave null, POLL retries */ }
+            });
+            await Promise.all(uploadTasks);
+            const doneCount = photoIds.filter((id) => id !== null).length;
+            preparedContainers.facebook = {
+              type: "photos",
+              photoIds,
+              ready: doneCount === photoIds.length,
+            };
+            log.push(`"${post.title}" Facebook photos: ${doneCount}/${photoIds.length} uploaded`);
+          }
+        }
+      }
+    }
+
     // Store per-platform errors for the PUBLISH step
     if (Object.keys(prepErrors).length > 0) {
       preparedContainers._errors = prepErrors;
@@ -723,7 +840,8 @@ export default async function CronPage({
     const needsPrep =
       (hasIg && !prepErrors.instagram && preparedContainers.instagram && !preparedContainers.instagram.ready) ||
       (hasThreads && !prepErrors.threads && preparedContainers.threads && !preparedContainers.threads.ready) ||
-      (hasBluesky && !prepErrors.bluesky && preparedContainers.bluesky && !preparedContainers.bluesky.ready);
+      (hasBluesky && !prepErrors.bluesky && preparedContainers.bluesky && !preparedContainers.bluesky.ready) ||
+      (hasFacebook && !prepErrors.facebook && preparedContainers.facebook && !preparedContainers.facebook.ready);
 
     // Check if EVERY selected platform failed during prepare
     // (if only some failed, let the survivors proceed through POLL/PUBLISH)
@@ -789,6 +907,7 @@ export default async function CronPage({
     const igState = containers.instagram;
     const threadsState = containers.threads;
     const bskyState = containers.bluesky;
+    const fbState = containers.facebook;
 
     const { data: connPlatforms } = await supabase
       .from("connected_platforms")
@@ -801,11 +920,12 @@ export default async function CronPage({
     const hasIgInPost = (post.platforms as string[]).includes("instagram");
     const hasThreadsInPost = (post.platforms as string[]).includes("threads");
     const hasBskyInPost = (post.platforms as string[]).includes("bluesky");
+    const hasFbInPost = (post.platforms as string[]).includes("facebook");
 
     // Check if PREPARE didn't finish at all (no containers AND no errors — means crash)
     // Applies to ANY post regardless of which platforms — Threads-only / Bluesky-only included
-    const hasAnyState = !!igState || !!threadsState || !!bskyState;
-    const needsAnyPrep = hasIgInPost || hasThreadsInPost || hasBskyInPost;
+    const hasAnyState = !!igState || !!threadsState || !!bskyState || !!fbState;
+    const needsAnyPrep = hasIgInPost || hasThreadsInPost || hasBskyInPost || hasFbInPost;
     if (needsAnyPrep && !hasAnyState && Object.keys(pollPrepErrors).length === 0) {
       await supabase.from("scheduled_posts").update({ status: "pending" }).eq("id", post.id);
       log.push(`"${post.title}": containers missing, reset to pending for retry`);
@@ -978,7 +1098,108 @@ export default async function CronPage({
       }
     }
 
-    const allReady = igReady && threadsReady && bskyReady;
+    // ── Poll Facebook state (retry missing photo uploads / check video processing) ──
+    let fbReady = !hasFbInPost || !!pollPrepErrors.facebook || (fbState?.ready ?? false);
+    if (!error && hasFbInPost && fbState && !fbState.ready) {
+      try {
+        const conn = connPlatforms?.find((c: Row) => c.platform === "facebook");
+        if (!conn || !conn.platform_user_id) {
+          log.push(`"${post.title}" Facebook: not connected, marking done`);
+          containers.facebook = { ...fbState, ready: true };
+          fbReady = true;
+        } else {
+          const fbToken = conn.access_token as string;
+          const pageId = conn.platform_user_id as string;
+          const FB_API = "https://graph.facebook.com/v23.0";
+
+          if (fbState.type === "photos" && fbState.photoIds) {
+            // Retry any null (failed/missing) photo uploads
+            const photoIds = [...fbState.photoIds];
+            const mediaTypes = (post.media_types as string[] | null) ?? [];
+            const missingIdx: number[] = [];
+            for (let i = 0; i < photoIds.length; i++) if (!photoIds[i]) missingIdx.push(i);
+            if (missingIdx.length > 0) {
+              const resolvedMissing = await Promise.all(
+                missingIdx.map(async (i) => {
+                  const stored = (post.media_urls as string[])[i];
+                  const mt = mediaTypes[i] ?? "";
+                  if (mt.startsWith("video/")) return { i, url: null }; // photos block won't mix
+                  return { i, url: await resolve(stored) };
+                })
+              );
+              await Promise.all(
+                resolvedMissing.map(async ({ i, url }) => {
+                  if (!url) return;
+                  try {
+                    const r = await timedFetch(`${FB_API}/${pageId}/photos`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                      body: new URLSearchParams({ access_token: fbToken, url, published: "false" }),
+                    }, 20_000);
+                    const d = await r.json().catch(() => ({}));
+                    if (r.ok && d.id) photoIds[i] = d.id as string;
+                  } catch { /* retry again next run */ }
+                })
+              );
+            }
+            const done = photoIds.every((id) => id !== null);
+            containers.facebook = { ...fbState, photoIds, ready: done };
+            fbReady = done;
+            log.push(`"${post.title}" Facebook photos poll: ${photoIds.filter(Boolean).length}/${photoIds.length}`);
+          } else if (fbState.type === "video") {
+            if (!fbState.videoFbId) {
+              // Upload never succeeded — retry now
+              const stored = (post.media_urls as string[])[0];
+              const videoUrl = await resolve(stored);
+              if (videoUrl) {
+                const description = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+                try {
+                  const r = await timedFetch(`${FB_API}/${pageId}/videos`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                    body: new URLSearchParams({
+                      access_token: fbToken,
+                      file_url: videoUrl,
+                      published: "false",
+                      description,
+                    }),
+                  }, 25_000);
+                  const d = await r.json().catch(() => ({}));
+                  if (r.ok && d.id) {
+                    containers.facebook = { ...fbState, videoFbId: d.id as string, videoProcessed: false, ready: false };
+                    log.push(`"${post.title}" Facebook video re-uploaded: ${d.id}`);
+                  }
+                } catch { /* retry again */ }
+              }
+            } else if (!fbState.videoProcessed) {
+              // Check processing status
+              const sRes = await timedFetch(
+                `${FB_API}/${fbState.videoFbId}?fields=status&access_token=${encodeURIComponent(fbToken)}`,
+                undefined, 10_000
+              );
+              if (sRes.ok) {
+                const sData = await sRes.json();
+                const vs = sData.status?.video_status;
+                if (vs === "ready") {
+                  containers.facebook = { ...fbState, videoProcessed: true, ready: true };
+                  fbReady = true;
+                  log.push(`"${post.title}" Facebook video processed`);
+                } else if (vs === "error") {
+                  // FB rejected the video — mark done so other platforms proceed, PUBLISH will fail FB
+                  containers.facebook = { ...fbState, videoProcessed: true, ready: true };
+                  fbReady = true;
+                  log.push(`"${post.title}" Facebook video processing error`);
+                }
+              }
+            }
+          }
+        }
+      } catch (err) {
+        log.push(`"${post.title}" Facebook POLL exception: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const allReady = igReady && threadsReady && bskyReady && fbReady;
 
     if (error) {
       const failResults: Record<string, { success: boolean; error?: string }> = {};
@@ -996,7 +1217,7 @@ export default async function CronPage({
         .from("scheduled_posts")
         .update({ prepared_containers: containers })
         .eq("id", post.id);
-      log.push(`"${post.title}": still preparing (ig:${igReady} threads:${threadsReady} bsky:${bskyReady})`);
+      log.push(`"${post.title}": still preparing (ig:${igReady} threads:${threadsReady} bsky:${bskyReady} fb:${fbReady})`);
     }
   }
 
@@ -1152,21 +1373,22 @@ export default async function CronPage({
         }
       }
 
-      // ── Publish Facebook Page post (no container needed — direct API call) ──
+      // ── Publish Facebook Page post (all heavy work done in PREPARE/POLL — just one fast call) ──
       if (platformId === "facebook") {
         if (!conn.platform_user_id) return { platformId, success: false, error: "Page ID missing" };
         const FB_API = "https://graph.facebook.com/v23.0";
         const message = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
         const pageId = conn.platform_user_id as string;
+        const fbPrep = containers.facebook;
 
         try {
-          if (!post.media_urls || (post.media_urls as string[]).length === 0) {
-            // Text-only post
+          // Text-only
+          if (!fbPrep || fbPrep.type === "text") {
             const r = await timedFetch(`${FB_API}/${pageId}/feed`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
               body: new URLSearchParams({ access_token: accessToken, message }),
-            }, 15_000);
+            }, 10_000);
             const d = await r.json().catch(() => ({}));
             if (!r.ok || d.error || (!d.id && !d.post_id)) {
               return { platformId, success: false, error: d.error?.message || `HTTP ${r.status}` };
@@ -1174,71 +1396,42 @@ export default async function CronPage({
             return { platformId, success: true };
           }
 
-          // Resolve all media URLs to signed URLs
-          const resolvedItems = await Promise.all(
-            (post.media_urls as string[]).map(async (stored, i) => ({
-              url: await resolve(stored),
-              isVideo: (post.media_types as string[] | null)?.[i]?.startsWith("video/") ?? false,
-            }))
-          );
-          const failedIdx = resolvedItems.findIndex((it) => !it.url);
-          if (failedIdx !== -1) return { platformId, success: false, error: `Failed to resolve URL for item ${failedIdx + 1}` };
-
-          if (resolvedItems.length === 1) {
-            const item = resolvedItems[0];
-            const endpoint = item.isVideo ? `${FB_API}/${pageId}/videos` : `${FB_API}/${pageId}/photos`;
-            const params: Record<string, string> = { access_token: accessToken };
-            if (item.isVideo) { params.file_url = item.url; if (message) params.description = message; }
-            else { params.url = item.url; if (message) params.caption = message; }
-
-            const r = await timedFetch(endpoint, {
+          // Photos — single fast /feed call using pre-uploaded media_fbids
+          if (fbPrep.type === "photos") {
+            const ids = (fbPrep.photoIds ?? []).filter((id): id is string => !!id);
+            if (ids.length === 0) return { platformId, success: false, error: "No photos uploaded" };
+            const feedParams: Record<string, string> = { access_token: accessToken, message };
+            ids.forEach((id, i) => {
+              feedParams[`attached_media[${i}]`] = JSON.stringify({ media_fbid: id });
+            });
+            const fr = await timedFetch(`${FB_API}/${pageId}/feed`, {
               method: "POST",
               headers: { "Content-Type": "application/x-www-form-urlencoded" },
-              body: new URLSearchParams(params),
-            }, item.isVideo ? 25_000 : 15_000);
+              body: new URLSearchParams(feedParams),
+            }, 15_000);
+            const fd = await fr.json().catch(() => ({}));
+            if (!fr.ok || fd.error || !fd.id) {
+              return { platformId, success: false, error: fd.error?.message || `Feed HTTP ${fr.status}` };
+            }
+            return { platformId, success: true };
+          }
+
+          // Video — publish the draft video
+          if (fbPrep.type === "video") {
+            if (!fbPrep.videoFbId) return { platformId, success: false, error: "Video upload did not complete" };
+            const r = await timedFetch(`${FB_API}/${fbPrep.videoFbId}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/x-www-form-urlencoded" },
+              body: new URLSearchParams({ access_token: accessToken, published: "true" }),
+            }, 10_000);
             const d = await r.json().catch(() => ({}));
-            if (!r.ok || d.error || (!d.id && !d.post_id)) {
+            if (!r.ok || d.error) {
               return { platformId, success: false, error: d.error?.message || `HTTP ${r.status}` };
             }
             return { platformId, success: true };
           }
 
-          // Multi-photo: only photos supported (FB doesn't allow image+video mix in single post)
-          if (resolvedItems.some((it) => it.isVideo)) {
-            return { platformId, success: false, error: "Facebook multi-post cannot mix images and videos" };
-          }
-
-          // Upload all photos as unpublished in parallel
-          const uploadResults = await Promise.all(
-            resolvedItems.map(async (item, i) => {
-              const r = await timedFetch(`${FB_API}/${pageId}/photos`, {
-                method: "POST",
-                headers: { "Content-Type": "application/x-www-form-urlencoded" },
-                body: new URLSearchParams({ access_token: accessToken, url: item.url, published: "false" }),
-              }, 15_000);
-              const d = await r.json().catch(() => ({}));
-              if (!r.ok || d.error || !d.id) return { id: null, error: d.error?.message || `HTTP ${r.status}`, index: i };
-              return { id: d.id as string, error: null, index: i };
-            })
-          );
-          const failedUpload = uploadResults.find((u) => !u.id);
-          if (failedUpload) return { platformId, success: false, error: `Photo ${failedUpload.index + 1}: ${failedUpload.error}` };
-
-          // Publish feed post with all attached_media
-          const feedParams: Record<string, string> = { access_token: accessToken, message };
-          uploadResults.forEach((u, i) => {
-            feedParams[`attached_media[${i}]`] = JSON.stringify({ media_fbid: u.id });
-          });
-          const fr = await timedFetch(`${FB_API}/${pageId}/feed`, {
-            method: "POST",
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
-            body: new URLSearchParams(feedParams),
-          }, 15_000);
-          const fd = await fr.json().catch(() => ({}));
-          if (!fr.ok || fd.error || !fd.id) {
-            return { platformId, success: false, error: fd.error?.message || `Feed HTTP ${fr.status}` };
-          }
-          return { platformId, success: true };
+          return { platformId, success: false, error: "Unknown Facebook state" };
         } catch (err) {
           return { platformId, success: false, error: err instanceof Error ? err.message : String(err) };
         }
