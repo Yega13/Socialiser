@@ -319,6 +319,7 @@ export default function ComposePage() {
       else if (selected.includes("youtube")) setPreviewTab("youtube");
       else if (selected.includes("bluesky")) setPreviewTab("bluesky");
       else if (selected.includes("threads")) setPreviewTab("threads");
+      else if (selected.includes("facebook")) setPreviewTab("facebook");
     }
   }, [selected, previewTab]);
 
@@ -1322,6 +1323,19 @@ export default function ComposePage() {
                     Threads Preview
                   </button>
                 )}
+                {facebookSelected && (
+                  <button
+                    onClick={() => setPreviewTab("facebook")}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-xs font-bold border border-[#0A0A0A] transition-all",
+                      previewTab === "facebook"
+                        ? "bg-[#1877F2] text-white shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "bg-white text-[#0A0A0A] hover:bg-[#F0F0F0]"
+                    )}
+                  >
+                    Facebook Preview
+                  </button>
+                )}
               </div>
             )}
 
@@ -1686,6 +1700,68 @@ export default function ComposePage() {
                   <span className="text-xs">♡</span>
                   <span className="text-xs">💬</span>
                   <span className="text-xs">↗</span>
+                </div>
+              </div>
+            )}
+
+            {/* ── Facebook Pages Preview ── */}
+            {(selected.length === 1 ? facebookSelected : previewTab === "facebook" && facebookSelected) && (
+              <div className="border border-[#0A0A0A] bg-white overflow-hidden shadow-[2px_2px_0px_0px_#0A0A0A]">
+                {/* Header */}
+                <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-[#E4E4E4]">
+                  <div className="w-8 h-8 rounded-full bg-[#1877F2] flex items-center justify-center text-white text-xs font-black">
+                    {(connected.find((c) => c.platform === "facebook")?.platform_username ?? "Page")[0].toUpperCase()}
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-[#0A0A0A]">
+                      {connected.find((c) => c.platform === "facebook")?.platform_username ?? "Your Page"}
+                    </div>
+                    <div className="text-[10px] text-[#5C5C5A]">Just now · 🌐</div>
+                  </div>
+                </div>
+                {/* Text */}
+                <div className="px-3 py-2">
+                  <p className="text-[14px] text-[#050505] whitespace-pre-wrap break-words leading-[20px]">
+                    {title}{description ? `\n\n${description}` : ""}
+                  </p>
+                </div>
+                {/* Media */}
+                {currentPreview && (
+                  <div className="border-t border-[#E4E4E4]">
+                    {currentPreview.file.type.startsWith("video/") ? (
+                      <video
+                        src={currentPreview.preview}
+                        className="w-full"
+                        style={{ aspectRatio: "16/9", objectFit: "cover" }}
+                        muted
+                      />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={currentPreview.preview}
+                        alt="Preview"
+                        className="w-full object-cover"
+                        style={{ aspectRatio: mediaItems.length > 1 ? "1/1" : "1.91/1", objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%` }}
+                      />
+                    )}
+                    {mediaItems.length > 1 && (
+                      <p className="text-[10px] text-[#5C5C5A] px-3 py-1">
+                        {mediaItems.filter((m) => m.file.type.startsWith("image/")).length} photos — multi-photo post
+                      </p>
+                    )}
+                  </div>
+                )}
+                {/* Actions */}
+                <div className="flex items-center border-t border-[#E4E4E4]">
+                  <button className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[#65676B] text-xs font-semibold hover:bg-[#F2F2F2]">
+                    👍 Like
+                  </button>
+                  <button className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[#65676B] text-xs font-semibold hover:bg-[#F2F2F2]">
+                    💬 Comment
+                  </button>
+                  <button className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[#65676B] text-xs font-semibold hover:bg-[#F2F2F2]">
+                    ↗ Share
+                  </button>
                 </div>
               </div>
             )}
