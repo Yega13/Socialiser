@@ -1,6 +1,96 @@
-# Socialiser — Session Handoff (2026-04-13)
+# Socialiser — Session Handoff (2026-04-17)
 
 Read this ENTIRE file before doing anything. It contains full context from the previous session.
+
+---
+
+## 2026-04-17 Session — Facebook Preview + Bluesky Video UX Fix
+
+### What was done
+
+1. **Facebook Pages preview tab added** in `src/app/(app)/compose/page.tsx`:
+   - New "Facebook Preview" tab button alongside Instagram/YouTube/Bluesky/Threads tabs (blue `#1877F2` active state)
+   - Preview panel shows: Page avatar + name, post text, media (image or video), Like/Comment/Share action bar
+   - Multi-photo posts show count ("X photos — multi-photo post")
+   - Images use 1.91:1 aspect for single, 1:1 for multi-photo (matching actual Facebook rendering)
+   - Auto-switch fallback chain updated to include facebook
+
+2. **Bluesky video processing UX fixed** in `src/lib/bluesky-video.ts`:
+   - **Problem**: "Upload complete, waiting for Bluesky to process..." message sat static for 20-320 seconds with zero feedback — users thought it was frozen
+   - **Fix (Step 3 — server wait)**: After XHR upload completes, shows live elapsed timer: `Sent! Bluesky is processing... (15s)` — updates every second via `setInterval`
+   - **Fix (Step 4 — polling)**: Shows both progress percentage AND elapsed time: `Processing video... 45% (32s)`. When no progress data, shows `Processing video on Bluesky... (32s)`
+   - Timer is properly cleaned up on success, error, and timeout paths
+
+3. **Deployed** to Cloudflare Workers via established pipeline:
+   - git push → git pull in C:\temp_socialiser → `npx opennextjs-cloudflare build` → copy .open-next to C:\temp_deploy → `npx wrangler@4.83.0 deploy`
+   - Live at: https://socialiser.yeganyansuren13.workers.dev
+
+### Files changed
+- `src/app/(app)/compose/page.tsx` — Facebook preview tab button + preview panel, auto-switch fallback chain
+- `src/lib/bluesky-video.ts` — elapsed timer in xhr.upload.onload + polling loop
+
+### What still needs testing
+- **Crash test 1**: Crosspost to all 5 platforms (YouTube, Instagram, Bluesky, Threads, Facebook Pages)
+- **Crash test 2**: Schedule to all 5 platforms
+- **Facebook posting** — connect works, posting code exists but untested on prod
+
+---
+
+## 2026-04-16 Session — Facebook Integration (OAuth Connect)
+
+### What was done
+1. **Facebook App created** — App ID `1876164933073799`, type "Manage everything on your Page" (this is required to get Pages permissions like `pages_manage_posts`, `pages_show_list`). Previous attempts with "Consumer" type app failed because Pages permissions weren't available.
+
+2. **Facebook Developer Console setup:**
+   - Use case: "Manage everything on your Page" — gives access to `pages_manage_posts`, `pages_show_list`, `pages_read_engagement`, `pages_manage_metadata`, `pages_read_user_content`, `business_management`, `public_profile`
+   - Valid OAuth Redirect URI: `https://socialiser.yeganyansuren13.workers.dev/facebook-callback`
+   - App Domains: `socialiser.yeganyansuren13.workers.dev`
+   - Privacy Policy URL: `https://socialiser.yeganyansuren13.workers.dev/privacy`
+   - App is in Development mode — only app admins/developers can test
+
+3. **Code changes:**
+   - `src/components/dashboard/platform-card.tsx` — updated Facebook client_id to `1876164933073799`, reduced OAuth scopes to `pages_show_list,pages_manage_posts,public_profile` (only scopes marked "Ready for testing" work in dev mode)
+   - `.env.local` — updated FACEBOOK_APP_ID and FACEBOOK_APP_SECRET
+   - `wrangler.toml` — updated FACEBOOK_APP_ID and FACEBOOK_APP_SECRET
+
+4. **Facebook callback code (already existed from previous session):**
+   - `src/app/(app)/facebook-callback/page.tsx` — OAuth callback page, handles code exchange, shows page picker if multiple pages
+   - `src/app/(app)/facebook-callback/actions.ts` — Server action: code → short token → long-lived token (60d) → fetch Pages with never-expiring page tokens → return pages list
+
+5. **Deployed** via `npx wrangler deploy` from `C:\temp_deploy` (bypassing OpenNext miniflare crash on Windows by copying `.open-next` build output to a clean dir without package.json)
+
+### Key learnings about Facebook Developer Console (2026 UI)
+- **New Meta Developer Console** does NOT have a traditional left sidebar with "Products". Instead: Use Cases, Application Settings, Publish, etc.
+- **App type matters**: "Consumer" type only gives user-level permissions (email, public_profile, user_friends). To get Pages permissions, must create app with **"Manage everything on your Page"** use case.
+- **Scopes must be "Ready for testing"** in the use case before they can be requested in OAuth. Requesting non-ready scopes returns "Invalid Scopes" error.
+- **Valid OAuth Redirect URIs** are configured inside the use case customization, not in a separate "Facebook Login" product settings.
+- **No "Facebook Login" product to add separately** — it's bundled into the use case.
+
+### Deploy workaround for Windows (ESTABLISHED PIPELINE — USE THIS EVERY TIME)
+The `opennextjs-cloudflare deploy` and `wrangler deploy` crash with miniflare `ERR_RUNTIME_FAILURE` (access violation) on Windows. Workaround:
+1. `git push origin master` from main repo
+2. `cd C:\temp_socialiser && git pull origin master` (clone outside OneDrive, already has npm install done)
+3. `npx opennextjs-cloudflare build` (build works fine)
+4. `rm -rf C:\temp_deploy\.open-next && cp -r C:\temp_socialiser\.open-next C:\temp_deploy\.open-next`
+5. `cd C:\temp_deploy && npx wrangler@4.83.0 deploy` (no package.json = no OpenNext detection = no miniflare)
+
+`C:\temp_deploy\wrangler.toml` already has all env vars (CRON_SECRET, THREADS_APP_ID/SECRET, FACEBOOK_APP_ID/SECRET).
+
+### What was tested and works
+- Facebook OAuth connect flow — WORKING (connected to "Best Mark" Page)
+- Facebook renamed to "Facebook Pages" in UI (constants.ts)
+
+### Facebook posting code (ALREADY BUILT, needs crash test)
+- `src/app/(app)/compose/actions.ts` — `postToFacebookServer` (text, image, video) + `postCarouselToFacebook` (multi-photo)
+- `src/app/(app)/compose/page.tsx` — Facebook posting integrated in parallel flow, shares Supabase uploads with IG/Threads
+- `src/app/cron/page.tsx` — Facebook publish in STEP 3 (text, single media, multi-photo, all with timedFetch)
+- Page tokens don't expire (derived from long-lived user token), so no refresh function needed
+- Facebook in scheduled posts / cron
+- Disconnect flow (should already work via platform-card.tsx generic disconnect)
+
+### Previous apps (DELETED, do not use)
+- App ID `1592813721786301` — Consumer type, wrong permissions
+- App ID `1832710561020985` — also wrong type
 
 ---
 
@@ -103,8 +193,8 @@ Use Edit to make targeted changes: delete bad code, insert correct code. Never u
 **Rule #2 — Analyze EVERYTHING before advising.**
 Do not rush recommendations. Think through the full picture before each suggestion. Review your own prior suggestions before giving new ones to avoid contradictions. If unsure, say so rather than giving confident but wrong advice.
 
-**Rule #3 — Deploying is done through Antigravity sidebar GUI.**
-The user deploys via the Antigravity sidebar GUI, not via CLI commands. Do not tell the user to run `npx opennextjs-cloudflare deploy` — just tell them to deploy through Antigravity. Build commands (`npx opennextjs-cloudflare build`) can still be run in terminal.
+**Rule #3 — Deploy via the established CLI pipeline (see "Deploy workaround for Windows" above).**
+Antigravity GUI no longer works (stuck on "scanning folder for Git repositories..."). Use the CLI pipeline: git push → pull in temp_socialiser → opennextjs-cloudflare build → copy .open-next to temp_deploy → wrangler deploy.
 
 **Rule #4 — CODE MUST BE THE BEST, FASTEST, AND IMPOSSIBLE TO CRASH.**
 Every piece of code MUST be optimized for maximum speed and bulletproof reliability. No lazy shortcuts, no "good enough" — write the FASTEST possible implementation every time. All error paths must be handled. All network calls must have timeouts. All loops must have bounds. Zero tolerance for code that can hang, freeze, or silently fail. If there's a faster way to do something, use it. Performance is not optional.
@@ -137,13 +227,14 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
   - Single image → Feed Post or Story
   - Single video → Video Post, Reel, or Story
   - Carousel (2+ files) → Carousel (auto, no choice needed)
-- **Scheduling**: Working reliably with state machine cron (YouTube, Instagram, Bluesky, Threads) — FIXED
+- **Facebook Pages**: Connect (OAuth), disconnect, post text/images/video/multi-photo, preview tab — CODE COMPLETE, needs crash test
+- **Scheduling**: Working reliably with state machine cron (YouTube, Instagram, Bluesky, Threads, Facebook) — FIXED
 - **Theme**: Light by default, persists user preference via localStorage
-- **Preview**: Live preview panel for Instagram (with type badge), YouTube (with thumbnail picker), and Bluesky (with drag-to-crop)
+- **Preview**: Live preview panel for Instagram (with type badge), YouTube (with thumbnail picker), Bluesky (with drag-to-crop), Threads, and Facebook Pages
 - **Image processing**: Aspect ratio cropping with drag-to-reposition, padding, brightness/contrast/saturation/quality in collapsible Filters dropdown
 - **Parallel posting**: All platforms post simultaneously, Supabase uploads in parallel, IG containers created in parallel
 - **Legal pages**: Privacy Policy (/privacy), Terms of Service (/tos), Content Policy (/content-policy) — all live
-- **19 routes build cleanly**
+- **21 routes build cleanly**
 
 ## Platforms in Constants (src/lib/constants.ts)
 - YouTube — LIVE, working
@@ -153,7 +244,7 @@ A social media cross-posting tool built with Next.js 16.1.6, TypeScript, Tailwin
 - X/Twitter — coming soon
 - LinkedIn — coming soon
 - TikTok — coming soon
-- Facebook — coming soon (blocked by Meta business verification)
+- Facebook Pages — LIVE, code complete (connect, post text/images/video/multi-photo, preview, scheduling) — needs crash test
 - VK — coming soon
 - Snapchat — coming soon
 - Pinterest — coming soon
@@ -562,7 +653,7 @@ This column ALREADY EXISTS in the live database. Don't try to add it again.
 ## Key Files to Know
 
 ### Core App
-- `src/app/(app)/compose/page.tsx` — main compose/posting page (~1540 lines, parallel posting, 3 preview panels)
+- `src/app/(app)/compose/page.tsx` — main compose/posting page (~1800 lines, parallel posting, 5 preview panels: Instagram, YouTube, Bluesky, Threads, Facebook)
 - `src/app/(app)/compose/actions.ts` — server actions for YouTube/Instagram/Bluesky posting (~448 lines)
 - `src/app/(app)/dashboard/` — main dashboard
 - `src/app/(app)/settings/` — settings page with theme toggle
@@ -593,17 +684,11 @@ This column ALREADY EXISTS in the live database. Don't try to add it again.
 
 ## What To Do Next (Priority Order)
 
-### 1. Re-test Scheduled 4-Platform Post
-Test A passed. Test B failed due to `"processing"` constraint bug (now fixed). Need to retest:
-- Schedule a post for all 4 platforms (YouTube, Instagram, Bluesky, Threads) and confirm it completes.
-- If it still fails, investigate cron Step 3 timeout — Threads carousel creation + wait within a single CF Worker run may exceed 30s.
-
-### 2. Facebook Integration
-Next major platform. Requires Meta Business verification (currently blocked). Uses Facebook Graph API.
-- Connect: OAuth via Facebook Login
-- Post: text, images, video to Facebook Pages
-- Requires: `pages_manage_posts`, `pages_read_engagement` permissions
-- May reuse some Threads OAuth infrastructure (same Meta ecosystem)
+### 1. Crash Test All 5 Platforms
+Facebook integration is code-complete. Need to crash test:
+- **Test 1**: Crosspost to all 5 platforms simultaneously (YouTube, Instagram, Bluesky, Threads, Facebook Pages)
+- **Test 2**: Schedule to all 5 platforms and confirm cron processes them correctly
+- Previous Test A (4-platform simultaneous) passed. Test B (4-platform scheduled) failed due to constraint bug (fixed). Facebook not yet tested at all.
 
 ### 3. LinkedIn Integration
 LinkedIn API v2 for posting to personal profiles and company pages.
@@ -664,10 +749,13 @@ Twitter API v2 free tier supports posting (1,500 tweets/month).
 
 ---
 
-## Git Status (2026-04-12)
+## Git Status (2026-04-17)
 - Branch: master
-- Modified this session: `src/app/(app)/compose/page.tsx`, `src/app/(app)/compose/actions.ts`, `src/lib/bluesky-video.ts`, `src/app/cron/page.tsx`, `src/app/(app)/scheduled/page.tsx`
-- Key fixes: Threads carousel publish wait, Bluesky video "already processed" handling, media picker for all platforms, image quality in filters dropdown, `createImageBitmap` + `ctx.filter` performance, shared Supabase uploads, `"processing"` → `"publishing"` constraint fix, Bluesky status message UX fix
-- Crash test A (simultaneous 4-platform post): PASSED
-- Crash test B (scheduled 4-platform post): FAILED — constraint bug found and fixed, needs retest
-- Uncommitted changes in: `compose/page.tsx`, `bluesky-video.ts`
+- Latest commit: `18fc157` — "Facebook preview tab + Bluesky video processing UX"
+- All changes committed and pushed to remote
+- Deployed to Cloudflare Workers (live)
+- **5 platforms code-complete**: YouTube, Instagram, Bluesky, Threads, Facebook Pages
+- **5 preview tabs**: Instagram, YouTube, Bluesky, Threads, Facebook Pages
+- Crash test A (simultaneous 4-platform post): PASSED (2026-04-12)
+- Crash test B (scheduled 4-platform post): FAILED then fixed (constraint bug)
+- **Crash test with all 5 platforms: NOT YET DONE — next priority**
