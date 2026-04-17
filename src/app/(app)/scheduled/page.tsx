@@ -585,13 +585,25 @@ export default function ScheduledPage() {
     return () => cleanup();
   }, [loadPosts]);
 
-  // Auto-refresh every 30s while any post is actively being processed
+  // Adaptive auto-refresh: 2s when a post is imminent/publishing, 30s otherwise.
+  // Realtime subscription handles most updates, but this catches edge cases
+  // (CF Workers + Supabase realtime can miss events) and makes status changes
+  // around scheduled time feel instant.
   useEffect(() => {
+    const now = Date.now();
+    const hasImminent = posts.some((p) => {
+      if (["preparing", "publishing"].includes(p.status)) return true;
+      if (p.status === "prepared" || p.status === "pending") {
+        const until = new Date(p.scheduled_at).getTime() - now;
+        return until < 2 * 60 * 1000; // within 2 min of fire time (or past)
+      }
+      return false;
+    });
     const hasActive = posts.some((p) =>
-      ["pending", "preparing", "prepared"].includes(p.status)
+      ["pending", "preparing", "prepared", "publishing"].includes(p.status)
     );
     if (!hasActive) return;
-    const interval = setInterval(loadPosts, 30000);
+    const interval = setInterval(loadPosts, hasImminent ? 2000 : 30000);
     return () => clearInterval(interval);
   }, [posts, loadPosts]);
 
