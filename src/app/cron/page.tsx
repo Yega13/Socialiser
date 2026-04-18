@@ -48,7 +48,11 @@ type FbContainerState = {
 };
 
 type MastodonPreparedState = {
-  // Indexed by media position; null = not yet uploaded (retry next run)
+  // Selected subset of post.media_urls (Mastodon: EITHER 1 video OR up to 4 images).
+  // Stored so POLL can retry using the same curated list.
+  selectedUrls?: string[];
+  selectedTypes?: string[];
+  // Indexed by selectedUrls position; null = not yet uploaded (retry next run)
   mediaIds?: (string | null)[];
   // Indexed same as mediaIds; true = Mastodon finished processing
   mediaReady?: boolean[];
@@ -854,9 +858,14 @@ export default async function CronPage({
           preparedContainers.mastodon = { ready: true };
           log.push(`"${post.title}" Mastodon text: ready`);
         } else {
-          const urls = post.media_urls as string[];
-          const mediaTypes = (post.media_types as string[] | null) ?? [];
-          const resolved = await Promise.all(urls.slice(0, 4).map((stored) => resolve(stored)));
+          const allUrls = post.media_urls as string[];
+          const allTypes = (post.media_types as string[] | null) ?? [];
+          // Mastodon allows EITHER 1 video OR up to 4 images, never mixed.
+          const videoIdx = allTypes.findIndex((t) => t.startsWith("video/"));
+          const useVideo = videoIdx >= 0;
+          const urls = useVideo ? [allUrls[videoIdx]] : allUrls.filter((_, i) => !allTypes[i]?.startsWith("video/")).slice(0, 4);
+          const mediaTypes = useVideo ? [allTypes[videoIdx]] : allTypes.filter((t) => !t.startsWith("video/")).slice(0, 4);
+          const resolved = await Promise.all(urls.map((stored) => resolve(stored)));
           const mediaIds: (string | null)[] = new Array(resolved.length).fill(null);
           const mediaReady: boolean[] = new Array(resolved.length).fill(false);
 
@@ -888,8 +897,14 @@ export default async function CronPage({
 
           const uploadedCount = mediaIds.filter((id) => id !== null).length;
           const allReady = mediaIds.every((id, i) => id !== null && mediaReady[i]);
-          preparedContainers.mastodon = { mediaIds, mediaReady, ready: allReady };
-          log.push(`"${post.title}" Mastodon: ${uploadedCount}/${mediaIds.length} uploaded, ${mediaReady.filter(Boolean).length} ready`);
+          preparedContainers.mastodon = {
+            selectedUrls: urls,
+            selectedTypes: mediaTypes,
+            mediaIds,
+            mediaReady,
+            ready: allReady,
+          };
+          log.push(`"${post.title}" Mastodon: ${uploadedCount}/${mediaIds.length} uploaded, ${mediaReady.filter(Boolean).length} ready${useVideo ? " (video)" : ""}`);
         }
       }
     }
@@ -1285,8 +1300,8 @@ export default async function CronPage({
           } else {
             const mediaIds = [...(mastoState.mediaIds ?? [])];
             const mediaReady = [...(mastoState.mediaReady ?? mediaIds.map(() => false))];
-            const urls = (post.media_urls as string[]) ?? [];
-            const mediaTypes = (post.media_types as string[] | null) ?? [];
+            const urls = mastoState.selectedUrls ?? [];
+            const mediaTypes = mastoState.selectedTypes ?? [];
 
             // Retry null uploads
             await Promise.all(mediaIds.map(async (id, i) => {
@@ -1331,7 +1346,13 @@ export default async function CronPage({
             }));
 
             const allMediaReady = mediaIds.every((id, i) => id !== null && mediaReady[i]);
-            containers.mastodon = { mediaIds, mediaReady, ready: allMediaReady };
+            containers.mastodon = {
+              selectedUrls: urls,
+              selectedTypes: mediaTypes,
+              mediaIds,
+              mediaReady,
+              ready: allMediaReady,
+            };
             mastoReady = allMediaReady;
             log.push(`"${post.title}" Mastodon poll: ${mediaIds.filter(Boolean).length}/${mediaIds.length} uploaded, ${mediaReady.filter(Boolean).length} ready`);
           }

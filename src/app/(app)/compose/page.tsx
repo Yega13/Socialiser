@@ -320,6 +320,7 @@ export default function ComposePage() {
       else if (selected.includes("bluesky")) setPreviewTab("bluesky");
       else if (selected.includes("threads")) setPreviewTab("threads");
       else if (selected.includes("facebook")) setPreviewTab("facebook");
+      else if (selected.includes("mastodon")) setPreviewTab("mastodon");
     }
   }, [selected, previewTab]);
 
@@ -619,7 +620,12 @@ export default function ComposePage() {
         const mediaIds: string[] = [];
         if (mediaItems.length > 0) {
           setPostingStatus("Uploading media to Mastodon...");
-          for (const item of mediaItems.slice(0, 4)) {
+          // Mastodon allows EITHER 1 video OR up to 4 images, never mixed
+          const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
+          const itemsToUpload = videoItem
+            ? [videoItem]
+            : mediaItems.filter((m) => m.file.type.startsWith("image/")).slice(0, 4);
+          for (const item of itemsToUpload) {
             const buf = await item.file.arrayBuffer();
             const form = new FormData();
             form.append("file", new Blob([buf], { type: item.file.type }), item.file.name);
@@ -1388,6 +1394,19 @@ export default function ComposePage() {
                     Facebook Preview
                   </button>
                 )}
+                {selected.includes("mastodon") && (
+                  <button
+                    onClick={() => setPreviewTab("mastodon")}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-xs font-bold border border-[#0A0A0A] transition-all",
+                      previewTab === "mastodon"
+                        ? "bg-[#6364FF] text-white shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "bg-white text-[#0A0A0A] hover:bg-[#F0F0F0]"
+                    )}
+                  >
+                    Mastodon Preview
+                  </button>
+                )}
               </div>
             )}
 
@@ -1814,6 +1833,68 @@ export default function ComposePage() {
                   <button className="flex-1 flex items-center justify-center gap-1.5 py-2 text-[#65676B] text-xs font-semibold hover:bg-[#F2F2F2]">
                     ↗ Share
                   </button>
+                </div>
+              </div>
+            )}
+
+            {/* ── Mastodon Preview ── */}
+            {(selected.length === 1 ? selected.includes("mastodon") : previewTab === "mastodon" && selected.includes("mastodon")) && (
+              <div className="border border-[#0A0A0A] bg-white overflow-hidden shadow-[2px_2px_0px_0px_#0A0A0A]">
+                {/* Header */}
+                <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-[#E4E4E4]">
+                  <div className="w-9 h-9 rounded-md bg-[#6364FF] flex items-center justify-center text-white text-xs font-black">
+                    {(connected.find((c) => c.platform === "mastodon")?.platform_username ?? "@you")[1]?.toUpperCase() ?? "M"}
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold text-[#0A0A0A]">
+                      {connected.find((c) => c.platform === "mastodon")?.platform_username ?? "@you@instance.social"}
+                    </div>
+                    <div className="text-[10px] text-[#5C5C5A]">just now · Public</div>
+                  </div>
+                </div>
+                {/* Text */}
+                <div className="px-3 py-2">
+                  <p className="text-[14px] text-[#17191f] whitespace-pre-wrap break-words leading-[1.4]">
+                    {title}{description ? `\n\n${description}` : ""}
+                  </p>
+                  <p className="text-[10px] text-[#5C5C5A] mt-1">
+                    {(`${title}${description ? "\n\n" + description : ""}`).length}/500 characters
+                  </p>
+                </div>
+                {/* Media */}
+                {currentPreview && (
+                  <div className="px-3 pb-3">
+                    {currentPreview.file.type.startsWith("video/") ? (
+                      <video
+                        src={currentPreview.preview}
+                        className="w-full border border-[#E4E4E4] rounded-md"
+                        style={{ aspectRatio: "16/9", objectFit: "cover" }}
+                        muted
+                      />
+                    ) : (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={currentPreview.preview}
+                        alt="Preview"
+                        className="w-full border border-[#E4E4E4] rounded-md object-cover"
+                        style={{ aspectRatio: "16/9", objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%` }}
+                      />
+                    )}
+                    {mediaItems.length > 1 && (
+                      <p className="text-[10px] text-[#5C5C5A] mt-1">
+                        {hasVideo
+                          ? `Video only — images will be skipped (Mastodon can't mix)`
+                          : `${Math.min(mediaItems.filter((m) => m.file.type.startsWith("image/")).length, 4)} of ${mediaItems.filter((m) => m.file.type.startsWith("image/")).length} images (Mastodon max: 4)`
+                        }
+                      </p>
+                    )}
+                  </div>
+                )}
+                {/* Actions */}
+                <div className="flex items-center gap-4 px-3 py-2 border-t border-[#E4E4E4] text-[#5C5C5A]">
+                  <span className="text-xs">↩ Reply</span>
+                  <span className="text-xs">🔁 Boost</span>
+                  <span className="text-xs">⭐ Favourite</span>
                 </div>
               </div>
             )}
