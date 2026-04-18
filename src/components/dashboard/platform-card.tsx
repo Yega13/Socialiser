@@ -25,7 +25,6 @@ export function PlatformCard({
   const [bskyError, setBskyError] = useState("");
   const [showMastodonForm, setShowMastodonForm] = useState(false);
   const [mastoInstance, setMastoInstance] = useState("");
-  const [mastoToken, setMastoToken] = useState("");
   const [mastoError, setMastoError] = useState("");
   const router = useRouter();
 
@@ -108,56 +107,29 @@ export function PlatformCard({
   }
 
   async function handleMastodonConnect() {
-    const { normalizeMastodonInstance, verifyMastodonToken } = await import("@/lib/mastodon");
-    const instance = normalizeMastodonInstance(mastoInstance);
-    const token = mastoToken.trim();
-    if (!instance || !token) { setMastoError("Enter both instance and access token."); return; }
+    const input = mastoInstance.trim();
+    if (!input) { setMastoError("Enter your handle or instance."); return; }
     setIsLoading(true);
     setMastoError("");
 
     try {
-      const account = await verifyMastodonToken(instance, token);
-      if (!account) {
-        setMastoError("Invalid instance or access token. Check scopes include write:statuses and write:media.");
-        setIsLoading(false);
-        return;
-      }
-
       const { createClient } = await import("@/lib/supabase/client");
       const supabase = createClient();
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { window.location.href = "/login"; return; }
 
-      const host = instance.replace(/^https?:\/\//, "");
-      const { error: dbError } = await supabase
-        .from("connected_platforms")
-        .upsert(
-          {
-            user_id: user.id,
-            platform: "mastodon",
-            platform_username: `@${account.username}@${host}`,
-            platform_user_id: account.id,
-            access_token: token,
-            refresh_token: instance,
-            is_active: true,
-          },
-          { onConflict: "user_id,platform" }
-        );
-
-      if (dbError) {
-        setMastoError(`Database error: ${dbError.message}`);
+      const { beginMastodonOAuth } = await import("@/app/(app)/mastodon-callback/actions");
+      const result = await beginMastodonOAuth(input, user.id, window.location.origin);
+      if (!result.authUrl) {
+        setMastoError(result.error || "Could not start OAuth.");
         setIsLoading(false);
         return;
       }
-
-      setShowMastodonForm(false);
-      setMastoInstance("");
-      setMastoToken("");
-      router.refresh();
+      window.location.href = result.authUrl;
     } catch (err) {
       setMastoError(err instanceof Error ? err.message : "Connection failed.");
+      setIsLoading(false);
     }
-    setIsLoading(false);
   }
 
   async function handleConnect() {
@@ -316,21 +288,15 @@ export function PlatformCard({
             placeholder="Your handle (e.g. @you@mastodon.social)"
             value={mastoInstance}
             onChange={(e) => setMastoInstance(e.target.value)}
-            className="w-full border border-[#0A0A0A] p-2 text-xs bg-[#F9F9F7] outline-none focus:shadow-[2px_2px_0px_0px_#6364FF]"
-          />
-          <input
-            type="password"
-            placeholder="Access Token"
-            value={mastoToken}
-            onChange={(e) => setMastoToken(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") handleMastodonConnect(); }}
+            autoFocus
             className="w-full border border-[#0A0A0A] p-2 text-xs bg-[#F9F9F7] outline-none focus:shadow-[2px_2px_0px_0px_#6364FF]"
           />
           {mastoError && (
             <p className="text-xs font-bold text-[#FF4F4F]">{mastoError}</p>
           )}
           <p className="text-[10px] text-[#5C5C5A]">
-            Paste your handle or instance URL — we&apos;ll figure out the server.
-            Token: your instance → Preferences → Development → your app → Your access token.
+            Paste your handle or instance domain. You&apos;ll be redirected to Mastodon to authorize.
           </p>
           <div className="flex gap-2">
             <Button
@@ -340,7 +306,7 @@ export function PlatformCard({
               onClick={handleMastodonConnect}
               className="flex-1"
             >
-              {isLoading ? "..." : "Connect"}
+              {isLoading ? "..." : "Continue"}
             </Button>
             <Button
               variant="outline"

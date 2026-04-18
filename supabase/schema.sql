@@ -90,3 +90,14 @@ create policy "Auth upload media" on storage.objects for insert with check (
   bucket_id = 'media' and auth.uid() is not null);
 create policy "Auth update media" on storage.objects for update using (
   bucket_id = 'media' and auth.uid() is not null);
+
+-- Mastodon app credentials cache — one row per instance.
+-- Service role writes (via server action); no client access needed.
+create table if not exists public.mastodon_apps (
+  instance text primary key,
+  client_id text not null,
+  client_secret text not null,
+  created_at timestamptz default now()
+);
+alter table public.mastodon_apps enable row level security;
+-- No policies = service role only. Anon/auth cannot read or write.
