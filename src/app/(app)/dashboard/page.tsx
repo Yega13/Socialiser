@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { PlatformsGrid } from "@/components/dashboard/platforms-grid";
+import { AnalyticsSection } from "@/components/dashboard/analytics-section";
 import { redirect } from "next/navigation";
 import Link from "next/link";
 
@@ -59,6 +60,8 @@ export default async function DashboardPage() {
         </div>
         <PlatformsGrid />
       </section>
+
+      <AnalyticsSection userId={user.id} />
     </div>
   );
 }
