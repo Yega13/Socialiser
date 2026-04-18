@@ -313,7 +313,7 @@ export function PlatformCard({
         <div className="space-y-2">
           <input
             type="text"
-            placeholder="Instance (e.g. mastodon.social)"
+            placeholder="Your handle (e.g. @you@mastodon.social)"
             value={mastoInstance}
             onChange={(e) => setMastoInstance(e.target.value)}
             className="w-full border border-[#0A0A0A] p-2 text-xs bg-[#F9F9F7] outline-none focus:shadow-[2px_2px_0px_0px_#6364FF]"
@@ -329,7 +329,8 @@ export function PlatformCard({
             <p className="text-xs font-bold text-[#FF4F4F]">{mastoError}</p>
           )}
           <p className="text-[10px] text-[#5C5C5A]">
-            On your instance: Settings → Development → New application — scopes: write:statuses, write:media
+            Paste your handle or instance URL — we&apos;ll figure out the server.
+            Token: your instance → Preferences → Development → your app → Your access token.
           </p>
           <div className="flex gap-2">
             <Button

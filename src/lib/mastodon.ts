@@ -1,8 +1,21 @@
 export function normalizeMastodonInstance(input: string): string {
-  const trimmed = input.trim().replace(/\/+$/, "");
-  if (!trimmed) return "";
-  if (/^https?:\/\//i.test(trimmed)) return trimmed;
-  return `https://${trimmed}`;
+  let s = input.trim().replace(/^@+/, "").replace(/\/+$/, "");
+  if (!s) return "";
+  // Handle formats: "user@host", "@user@host", "host", "https://host", "https://host/@user"
+  if (/^https?:\/\//i.test(s)) {
+    try {
+      const url = new URL(s);
+      return `${url.protocol}//${url.host}`;
+    } catch {
+      return "";
+    }
+  }
+  if (s.includes("@")) {
+    const parts = s.split("@").filter(Boolean);
+    s = parts[parts.length - 1];
+  }
+  if (!/^[a-z0-9.-]+\.[a-z]{2,}$/i.test(s)) return "";
+  return `https://${s}`;
 }
 
 export async function verifyMastodonToken(
