@@ -102,7 +102,7 @@ async function metricsForConnection(conn: Conn): Promise<{ metrics: Metrics; err
       }
       const m = await fetchInstagramMetrics(token, conn.platform_user_id);
       if (m.followers === null)
-        return { metrics: m, error: "Insights fetch failed — reconnect Instagram to grant new scopes." };
+        return { metrics: m, error: "Instagram fetch failed — try reconnecting Instagram." };
       return { metrics: m };
     }
     if (conn.platform === "threads") {

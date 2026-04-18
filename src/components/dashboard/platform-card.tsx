@@ -163,7 +163,7 @@ export function PlatformCard({
         client_id: "786960820704998",
         redirect_uri: `${window.location.origin}/instagram-callback`,
         response_type: "code",
-        scope: "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights",
+        scope: "instagram_business_basic,instagram_business_content_publish",
         state: user.id,
       });
       window.location.href = `https://api.instagram.com/oauth/authorize?${params}`;

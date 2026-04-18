@@ -209,6 +209,61 @@ export function AnalyticsSection({ userId }: { userId: string }) {
           </ResponsiveContainer>
         </div>
       </div>
+
+      <div className="mt-6 bg-[#F9F9F7] border border-[#0A0A0A] shadow-[4px_4px_0px_0px_#0A0A0A] p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <span className="inline-flex items-center px-2.5 py-1.5 bg-[#FF4F4F] border border-[#0A0A0A] shadow-[3px_3px_0px_0px_#0A0A0A] text-[10px] font-black uppercase tracking-wider text-[#F9F9F7]">
+            Limits
+          </span>
+          <span className="text-sm font-bold text-[#0A0A0A]">What each platform can&apos;t show — and why</span>
+        </div>
+        <ul className="space-y-2 text-xs text-[#0A0A0A]">
+          <li>
+            <span className="font-black uppercase">YouTube:</span>{" "}
+            <span className="font-bold">Shares</span> — YouTube Data API doesn&apos;t expose share counts.{" "}
+            <span className="font-bold">Reach</span> &amp;{" "}
+            <span className="font-bold">Monetization</span> — need{" "}
+            <span className="font-mono">yt-analytics.readonly</span> +{" "}
+            <span className="font-mono">yt-analytics-monetary.readonly</span> scopes.
+          </li>
+          <li>
+            <span className="font-black uppercase">Facebook:</span>{" "}
+            <span className="font-bold">Views</span> — Page API doesn&apos;t expose post-view counts (video views only).{" "}
+            <span className="font-bold">Monetization</span> — requires{" "}
+            <span className="font-mono">ads_read</span> + approved business.
+          </li>
+          <li>
+            <span className="font-black uppercase">Instagram:</span>{" "}
+            <span className="font-bold">Views</span>,{" "}
+            <span className="font-bold">Shares</span>,{" "}
+            <span className="font-bold">Reach</span>,{" "}
+            <span className="font-bold">Monetization</span> — require{" "}
+            <span className="font-mono">instagram_business_manage_insights</span> which needs Meta{" "}
+            <span className="font-bold">Business Verification</span> (registered legal entity).
+          </li>
+          <li>
+            <span className="font-black uppercase">Threads:</span>{" "}
+            <span className="font-bold">Reach</span> — not exposed by Threads API.{" "}
+            <span className="font-bold">Monetization</span> — no monetization product on Threads yet.
+          </li>
+          <li>
+            <span className="font-black uppercase">Bluesky:</span>{" "}
+            <span className="font-bold">Views</span>,{" "}
+            <span className="font-bold">Reach</span> — AT Protocol doesn&apos;t track impressions per post.{" "}
+            <span className="font-bold">Monetization</span> — no creator-fund API.
+          </li>
+          <li>
+            <span className="font-black uppercase">Mastodon:</span>{" "}
+            <span className="font-bold">Views</span>,{" "}
+            <span className="font-bold">Reach</span> — fediverse doesn&apos;t record impressions.{" "}
+            <span className="font-bold">Monetization</span> — no native monetization.
+          </li>
+          <li>
+            <span className="font-black uppercase">TikTok:</span>{" "}
+            not connected yet — coming soon.
+          </li>
+        </ul>
+      </div>
     </section>
   );
 }

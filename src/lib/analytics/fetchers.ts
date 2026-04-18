@@ -95,6 +95,7 @@ export async function fetchYouTubeMetrics(
 // ── Facebook Pages ────────────────────────────────────────────────
 // followers_count + fan_count from Page object.
 // Reach via page_impressions_unique (requires read_insights scope).
+// Per-post likes/comments/shares summed over recent posts (pages_read_engagement).
 export async function fetchFacebookMetrics(
   pageAccessToken: string,
   pageId: string
@@ -123,14 +124,34 @@ export async function fetchFacebookMetrics(
       // ignore, keep 0
     }
 
+    let likes = 0;
+    let comments = 0;
+    let shares = 0;
+    try {
+      const postsRes = await fetch(
+        `https://graph.facebook.com/v23.0/${pageId}/posts?fields=likes.summary(true),comments.summary(true),shares&limit=25&access_token=${encodeURIComponent(pageAccessToken)}`,
+        { signal: timeout(TIMEOUT) }
+      );
+      if (postsRes.ok) {
+        const postsData = await postsRes.json();
+        for (const p of postsData.data ?? []) {
+          likes += Number(p.likes?.summary?.total_count) || 0;
+          comments += Number(p.comments?.summary?.total_count) || 0;
+          shares += Number(p.shares?.count) || 0;
+        }
+      }
+    } catch {
+      // ignore, keep 0
+    }
+
     return {
       views: 0,
-      likes: 0,
-      shares: 0,
+      likes,
+      shares,
       followers,
       reach,
       monetization: 0,
-      comments: 0,
+      comments,
     };
   } catch {
     return EMPTY_METRICS;
