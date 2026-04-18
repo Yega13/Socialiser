@@ -93,7 +93,8 @@ export async function fetchYouTubeMetrics(
 }
 
 // ── Facebook Pages ────────────────────────────────────────────────
-// followers_count + fan_count from Page object. Reach/impressions need Insights scope.
+// followers_count + fan_count from Page object.
+// Reach via page_impressions_unique (requires read_insights scope).
 export async function fetchFacebookMetrics(
   pageAccessToken: string,
   pageId: string
@@ -106,14 +107,138 @@ export async function fetchFacebookMetrics(
     if (!res.ok) return EMPTY_METRICS;
     const data = await res.json();
     const followers = Number(data.followers_count ?? data.fan_count) || 0;
+
+    let reach = 0;
+    try {
+      const inRes = await fetch(
+        `https://graph.facebook.com/v23.0/${pageId}/insights?metric=page_impressions_unique&period=days_28&access_token=${encodeURIComponent(pageAccessToken)}`,
+        { signal: timeout(TIMEOUT) }
+      );
+      if (inRes.ok) {
+        const inData = await inRes.json();
+        const values = inData.data?.[0]?.values ?? [];
+        reach = values.reduce((acc: number, v: { value?: number }) => acc + (Number(v.value) || 0), 0);
+      }
+    } catch {
+      // ignore, keep 0
+    }
+
     return {
       views: 0,
       likes: 0,
       shares: 0,
       followers,
-      reach: 0,
+      reach,
       monetization: 0,
       comments: 0,
+    };
+  } catch {
+    return EMPTY_METRICS;
+  }
+}
+
+// ── Instagram Business ────────────────────────────────────────────
+// Basic: followers_count, media_count via Graph API.
+// Insights (reach) via /{ig-user-id}/insights.
+// Per-post likes/comments summed from recent media.
+export async function fetchInstagramMetrics(
+  accessToken: string,
+  igUserId: string
+): Promise<Metrics> {
+  try {
+    const profRes = await fetch(
+      `https://graph.instagram.com/v23.0/${igUserId}?fields=followers_count,media_count&access_token=${encodeURIComponent(accessToken)}`,
+      { signal: timeout(TIMEOUT) }
+    );
+    if (!profRes.ok) return EMPTY_METRICS;
+    const prof = await profRes.json();
+    const followers = Number(prof.followers_count) || 0;
+
+    let likes = 0;
+    let comments = 0;
+    try {
+      const mRes = await fetch(
+        `https://graph.instagram.com/v23.0/${igUserId}/media?fields=like_count,comments_count&limit=25&access_token=${encodeURIComponent(accessToken)}`,
+        { signal: timeout(TIMEOUT) }
+      );
+      if (mRes.ok) {
+        const mData = await mRes.json();
+        for (const m of mData.data ?? []) {
+          likes += Number(m.like_count) || 0;
+          comments += Number(m.comments_count) || 0;
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    let reach = 0;
+    try {
+      const inRes = await fetch(
+        `https://graph.instagram.com/v23.0/${igUserId}/insights?metric=reach&period=days_28&metric_type=total_value&access_token=${encodeURIComponent(accessToken)}`,
+        { signal: timeout(TIMEOUT) }
+      );
+      if (inRes.ok) {
+        const inData = await inRes.json();
+        reach = Number(inData.data?.[0]?.total_value?.value) || 0;
+      }
+    } catch {
+      // ignore
+    }
+
+    return {
+      views: 0,
+      likes,
+      shares: 0,
+      followers,
+      reach,
+      monetization: 0,
+      comments,
+    };
+  } catch {
+    return EMPTY_METRICS;
+  }
+}
+
+// ── Threads ───────────────────────────────────────────────────────
+// Account insights: views, likes, replies, reposts, quotes, followers_count.
+// Requires threads_manage_insights scope.
+export async function fetchThreadsMetrics(
+  accessToken: string,
+  threadsUserId: string
+): Promise<Metrics> {
+  try {
+    const res = await fetch(
+      `https://graph.threads.net/v1.0/${threadsUserId}/threads_insights?metric=views,likes,replies,reposts,quotes,followers_count&access_token=${encodeURIComponent(accessToken)}`,
+      { signal: timeout(TIMEOUT) }
+    );
+    if (!res.ok) return EMPTY_METRICS;
+    const data = await res.json();
+
+    const byName = new Map<string, number>();
+    for (const entry of data.data ?? []) {
+      const name = entry.name as string;
+      let val = 0;
+      if (name === "followers_count") {
+        val = Number(entry.total_value?.value) || 0;
+      } else {
+        const values = entry.values ?? [];
+        val = values.reduce((a: number, v: { value?: number }) => a + (Number(v.value) || 0), 0);
+        if (entry.total_value?.value != null) val = Number(entry.total_value.value) || val;
+      }
+      byName.set(name, val);
+    }
+
+    const shares = (byName.get("reposts") || 0) + (byName.get("quotes") || 0);
+
+    return {
+      views: byName.get("views") || 0,
+      likes: byName.get("likes") || 0,
+      shares,
+      followers: byName.get("followers_count") || 0,
+      reach: 0,
+      monetization: 0,
+      comments: byName.get("replies") || 0,
     };
   } catch {
     return EMPTY_METRICS;

@@ -163,7 +163,7 @@ export function PlatformCard({
         client_id: "786960820704998",
         redirect_uri: `${window.location.origin}/instagram-callback`,
         response_type: "code",
-        scope: "instagram_business_basic,instagram_business_content_publish",
+        scope: "instagram_business_basic,instagram_business_content_publish,instagram_business_manage_insights",
         state: user.id,
       });
       window.location.href = `https://api.instagram.com/oauth/authorize?${params}`;
@@ -177,7 +177,7 @@ export function PlatformCard({
         client_id: "1299493258747441",
         redirect_uri: `${window.location.origin}/threads-callback`,
         response_type: "code",
-        scope: "threads_basic,threads_content_publish",
+        scope: "threads_basic,threads_content_publish,threads_manage_insights",
         state: user.id,
       });
       window.location.href = `https://threads.net/oauth/authorize?${params}`;
@@ -191,7 +191,7 @@ export function PlatformCard({
         client_id: "1876164933073799",
         redirect_uri: `${window.location.origin}/facebook-callback`,
         response_type: "code",
-        scope: "pages_show_list,pages_manage_posts,public_profile",
+        scope: "pages_show_list,pages_manage_posts,pages_read_engagement,read_insights,public_profile",
         state: user.id,
       });
       window.location.href = `https://www.facebook.com/v23.0/dialog/oauth?${params}`;

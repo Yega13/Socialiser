@@ -8,9 +8,11 @@ import {
   fetchFacebookMetrics,
   fetchBlueskyMetrics,
   fetchMastodonMetrics,
+  fetchInstagramMetrics,
+  fetchThreadsMetrics,
   sumMetrics,
 } from "@/lib/analytics/fetchers";
-import { refreshYouTubeToken } from "@/app/(app)/compose/actions";
+import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken } from "@/app/(app)/compose/actions";
 import { resolveBlueskyPDS } from "@/lib/bluesky";
 
 export type TimeRange = "day" | "week" | "month" | "3mo" | "6mo" | "year" | "max";
@@ -89,8 +91,33 @@ async function metricsForConnection(conn: Conn): Promise<{ metrics: Metrics; err
         return { metrics: EMPTY_METRICS, error: "Missing instance or token — reconnect Mastodon." };
       return { metrics: await fetchMastodonMetrics(conn.refresh_token, conn.access_token) };
     }
-    if (conn.platform === "instagram" || conn.platform === "threads") {
-      return { metrics: EMPTY_METRICS, error: "Insights scope required — re-auth not wired yet." };
+    if (conn.platform === "instagram") {
+      if (!conn.access_token || !conn.platform_user_id)
+        return { metrics: EMPTY_METRICS, error: "Missing IG credentials — reconnect Instagram." };
+      let token = conn.access_token;
+      const expires = conn.token_expires_at ? new Date(conn.token_expires_at).getTime() : 0;
+      if (expires && expires < Date.now() + 60_000) {
+        const refreshed = await refreshInstagramToken(token);
+        if (refreshed) token = refreshed.access_token;
+      }
+      const m = await fetchInstagramMetrics(token, conn.platform_user_id);
+      if (m.followers === null)
+        return { metrics: m, error: "Insights fetch failed — reconnect Instagram to grant new scopes." };
+      return { metrics: m };
+    }
+    if (conn.platform === "threads") {
+      if (!conn.access_token || !conn.platform_user_id)
+        return { metrics: EMPTY_METRICS, error: "Missing Threads credentials — reconnect Threads." };
+      let token = conn.access_token;
+      const expires = conn.token_expires_at ? new Date(conn.token_expires_at).getTime() : 0;
+      if (expires && expires < Date.now() + 60_000) {
+        const refreshed = await refreshThreadsToken(token);
+        if (refreshed) token = refreshed.access_token;
+      }
+      const m = await fetchThreadsMetrics(token, conn.platform_user_id);
+      if (m.followers === null)
+        return { metrics: m, error: "Insights fetch failed — reconnect Threads to grant new scopes." };
+      return { metrics: m };
     }
     return { metrics: EMPTY_METRICS, error: `No analytics fetcher for ${conn.platform}.` };
   } catch (e) {
