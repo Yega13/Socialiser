@@ -914,6 +914,21 @@ export default function ComposePage() {
               YouTube only supports videos — photos will be skipped on YouTube.
             </p>
           )}
+          {selected.includes("mastodon") && mediaItems.length > 1 && hasVideo && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+            <p className="text-xs text-[#FF4F4F] font-bold mt-2">
+              Video only — images will be skipped on Mastodon (can&apos;t mix).
+            </p>
+          )}
+          {blueskySelected && mediaItems.length > 1 && hasVideo && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+            <p className="text-xs text-[#FF4F4F] font-bold mt-2">
+              Video only — images will be skipped on Bluesky (can&apos;t mix).
+            </p>
+          )}
+          {facebookSelected && mediaItems.length > 1 && hasVideo && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
+            <p className="text-xs text-[#FF4F4F] font-bold mt-2">
+              Facebook can&apos;t mix images and video — pick one or the other.
+            </p>
+          )}
         </div>
 
         {/* Title */}
@@ -1880,12 +1895,9 @@ export default function ComposePage() {
                         style={{ aspectRatio: "16/9", objectPosition: `${currentPreview.cropOffset.x * 100}% ${currentPreview.cropOffset.y * 100}%` }}
                       />
                     )}
-                    {mediaItems.length > 1 && (
+                    {mediaItems.length > 1 && !hasVideo && (
                       <p className="text-[10px] text-[#5C5C5A] mt-1">
-                        {hasVideo
-                          ? `Video only — images will be skipped (Mastodon can't mix)`
-                          : `${Math.min(mediaItems.filter((m) => m.file.type.startsWith("image/")).length, 4)} of ${mediaItems.filter((m) => m.file.type.startsWith("image/")).length} images (Mastodon max: 4)`
-                        }
+                        {Math.min(mediaItems.filter((m) => m.file.type.startsWith("image/")).length, 4)} of {mediaItems.filter((m) => m.file.type.startsWith("image/")).length} images (Mastodon max: 4)
                       </p>
                     )}
                   </div>
