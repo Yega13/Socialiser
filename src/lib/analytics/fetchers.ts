@@ -49,8 +49,8 @@ export async function fetchYouTubeMetrics(
     const followers = Number(stats.subscriberCount) || 0;
     const uploadsPlaylist = ch.contentDetails?.relatedPlaylists?.uploads;
 
-    let likes: number | null = null;
-    let comments: number | null = null;
+    let likes = 0;
+    let comments = 0;
 
     if (uploadsPlaylist) {
       const plRes = await fetch(
@@ -69,8 +69,6 @@ export async function fetchYouTubeMetrics(
           );
           if (vRes.ok) {
             const vData = await vRes.json();
-            likes = 0;
-            comments = 0;
             for (const v of vData.items ?? []) {
               likes += Number(v.statistics?.likeCount) || 0;
               comments += Number(v.statistics?.commentCount) || 0;
@@ -83,10 +81,10 @@ export async function fetchYouTubeMetrics(
     return {
       views,
       likes,
-      shares: null,
+      shares: 0,
       followers,
-      reach: null,
-      monetization: null,
+      reach: 0,
+      monetization: 0,
       comments,
     };
   } catch {
@@ -108,7 +106,15 @@ export async function fetchFacebookMetrics(
     if (!res.ok) return EMPTY_METRICS;
     const data = await res.json();
     const followers = Number(data.followers_count ?? data.fan_count) || 0;
-    return { ...EMPTY_METRICS, followers };
+    return {
+      views: 0,
+      likes: 0,
+      shares: 0,
+      followers,
+      reach: 0,
+      monetization: 0,
+      comments: 0,
+    };
   } catch {
     return EMPTY_METRICS;
   }
@@ -152,12 +158,12 @@ export async function fetchBlueskyMetrics(
     }
 
     return {
-      views: null,
+      views: 0,
       likes,
       shares,
       followers,
-      reach: null,
-      monetization: null,
+      reach: 0,
+      monetization: 0,
       comments,
     };
   } catch {
@@ -206,12 +212,12 @@ export async function fetchMastodonMetrics(
     }
 
     return {
-      views: null,
+      views: 0,
       likes,
       shares,
       followers,
-      reach: null,
-      monetization: null,
+      reach: 0,
+      monetization: 0,
       comments,
     };
   } catch {

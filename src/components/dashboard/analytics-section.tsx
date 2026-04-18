@@ -86,7 +86,10 @@ export function AnalyticsSection({ userId }: { userId: string }) {
         {isPending && <span className="text-xs text-[#5C5C5A]">Loading…</span>}
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-3">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <span className="inline-flex items-center px-2.5 py-1.5 bg-[#C8FF00] border border-[#0A0A0A] shadow-[3px_3px_0px_0px_#0A0A0A] text-[10px] font-black uppercase tracking-wider text-[#0A0A0A]">
+          Social Media
+        </span>
         {PLATFORM_OPTIONS.map((p) => (
           <button
             key={p.id}
@@ -102,7 +105,10 @@ export function AnalyticsSection({ userId }: { userId: string }) {
         ))}
       </div>
 
-      <div className="flex flex-wrap gap-2 mb-4">
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        <span className="inline-flex items-center px-2.5 py-1.5 bg-[#7C3AED] border border-[#0A0A0A] shadow-[3px_3px_0px_0px_#0A0A0A] text-[10px] font-black uppercase tracking-wider text-[#F9F9F7]">
+          Period
+        </span>
         {RANGE_OPTIONS.map((r) => (
           <button
             key={r.id}
