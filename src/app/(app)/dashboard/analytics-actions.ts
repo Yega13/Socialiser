@@ -24,12 +24,14 @@ export type AnalyticsPlatform =
   | "bluesky"
   | "mastodon";
 
-export type PlatformMetrics = { platform: string; metrics: Metrics };
+export type PlatformMetrics = { platform: string; metrics: Metrics; error?: string };
 export type SeriesPoint = { date: string; count: number };
 export type AnalyticsResult = {
   metrics: Metrics;
   perPlatform: PlatformMetrics[];
   series: SeriesPoint[];
+  errors: { platform: string; message: string }[];
+  connectedCount: number;
 };
 
 const RANGE_DAYS: Record<TimeRange, number> = {
@@ -58,31 +60,42 @@ type Conn = {
   platform_username: string | null;
 };
 
-async function metricsForConnection(conn: Conn): Promise<Metrics> {
+async function metricsForConnection(conn: Conn): Promise<{ metrics: Metrics; error?: string }> {
   try {
-    if (conn.platform === "youtube" && conn.access_token) {
+    if (conn.platform === "youtube") {
+      if (!conn.access_token) return { metrics: EMPTY_METRICS, error: "No access token — reconnect YouTube." };
       let token = conn.access_token;
       const expires = conn.token_expires_at ? new Date(conn.token_expires_at).getTime() : 0;
       if (expires && expires < Date.now() + 60_000 && conn.refresh_token) {
         const refreshed = await refreshYouTubeToken(conn.refresh_token);
         if (refreshed) token = refreshed;
+        else return { metrics: EMPTY_METRICS, error: "Token refresh failed — reconnect YouTube." };
       }
-      return await fetchYouTubeMetrics(token);
+      return { metrics: await fetchYouTubeMetrics(token) };
     }
-    if (conn.platform === "facebook" && conn.access_token && conn.platform_user_id) {
-      return await fetchFacebookMetrics(conn.access_token, conn.platform_user_id);
+    if (conn.platform === "facebook") {
+      if (!conn.access_token || !conn.platform_user_id)
+        return { metrics: EMPTY_METRICS, error: "Missing Page credentials — reconnect Facebook." };
+      return { metrics: await fetchFacebookMetrics(conn.access_token, conn.platform_user_id) };
     }
-    if (conn.platform === "bluesky" && conn.access_token && conn.platform_user_id) {
+    if (conn.platform === "bluesky") {
+      if (!conn.access_token || !conn.platform_user_id)
+        return { metrics: EMPTY_METRICS, error: "Missing DID or token — reconnect Bluesky." };
       const pds = await resolveBlueskyPDS(conn.platform_user_id);
-      return await fetchBlueskyMetrics(conn.access_token, conn.platform_user_id, pds);
+      return { metrics: await fetchBlueskyMetrics(conn.access_token, conn.platform_user_id, pds) };
     }
-    if (conn.platform === "mastodon" && conn.access_token && conn.refresh_token) {
-      return await fetchMastodonMetrics(conn.refresh_token, conn.access_token);
+    if (conn.platform === "mastodon") {
+      if (!conn.access_token || !conn.refresh_token)
+        return { metrics: EMPTY_METRICS, error: "Missing instance or token — reconnect Mastodon." };
+      return { metrics: await fetchMastodonMetrics(conn.refresh_token, conn.access_token) };
     }
-  } catch {
-    // fall through
+    if (conn.platform === "instagram" || conn.platform === "threads") {
+      return { metrics: EMPTY_METRICS, error: "Insights scope required — re-auth not wired yet." };
+    }
+    return { metrics: EMPTY_METRICS, error: `No analytics fetcher for ${conn.platform}.` };
+  } catch (e) {
+    return { metrics: EMPTY_METRICS, error: (e as Error).message || "Unknown error" };
   }
-  return EMPTY_METRICS;
 }
 
 export async function getAnalytics(
@@ -111,9 +124,16 @@ export async function getAnalytics(
       ? connections
       : connections.filter((c) => c.platform === platformFilter);
 
-  const perPlatformResults = await Promise.all(
-    filtered.map(async (c) => ({ platform: c.platform, metrics: await metricsForConnection(c) }))
+  const perPlatformResults: PlatformMetrics[] = await Promise.all(
+    filtered.map(async (c) => {
+      const r = await metricsForConnection(c);
+      return { platform: c.platform, metrics: r.metrics, error: r.error };
+    })
   );
+
+  const errors = perPlatformResults
+    .filter((p) => p.error)
+    .map((p) => ({ platform: p.platform, message: p.error! }));
 
   const metrics =
     platformFilter === "overall"
@@ -149,5 +169,11 @@ export async function getAnalytics(
     count,
   }));
 
-  return { metrics, perPlatform: perPlatformResults, series };
+  return {
+    metrics,
+    perPlatform: perPlatformResults,
+    series,
+    errors,
+    connectedCount: connections.length,
+  };
 }

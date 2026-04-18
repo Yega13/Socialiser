@@ -130,6 +130,23 @@ export function AnalyticsSection({ userId }: { userId: string }) {
         </div>
       )}
 
+      {data && data.connectedCount === 0 && (
+        <div className="mb-4 p-3 border border-[#0A0A0A] bg-[#FFFBE5] text-sm text-[#0A0A0A] font-bold">
+          No platforms connected — connect one above to see stats.
+        </div>
+      )}
+
+      {data && data.errors && data.errors.length > 0 && (
+        <div className="mb-4 p-3 border border-[#FF4F4F] bg-[#FFF1F1] text-xs text-[#0A0A0A] space-y-1">
+          <p className="font-black uppercase tracking-wider text-[#FF4F4F]">Data issues</p>
+          {data.errors.map((e) => (
+            <p key={e.platform}>
+              <span className="font-bold uppercase">{e.platform}:</span> {e.message}
+            </p>
+          ))}
+        </div>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 mb-6">
         {METRIC_TILES.map((tile) => {
           const value = data?.metrics[tile.key] ?? null;
