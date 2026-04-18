@@ -18,7 +18,7 @@ import {
 } from "@/app/(app)/dashboard/analytics-actions";
 
 const PLATFORM_OPTIONS: { id: AnalyticsPlatform; label: string; color: string }[] = [
-  { id: "overall", label: "Overall", color: "#0A0A0A" },
+  { id: "overall", label: "Combined", color: "#0A0A0A" },
   { id: "youtube", label: "YouTube", color: "#FF0000" },
   { id: "instagram", label: "Instagram", color: "#E1306C" },
   { id: "threads", label: "Threads", color: "#0A0A0A" },
