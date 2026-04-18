@@ -71,15 +71,6 @@ export const PLATFORMS = [
     comingSoon: false,
   },
   {
-    id: "pinterest",
-    name: "Pinterest",
-    description: "Pin images & ideas",
-    icon: "P",
-    color: "#E60023",
-    textColor: "#F9F9F7",
-    comingSoon: true,
-  },
-  {
     id: "bluesky",
     name: "Bluesky",
     description: "Post to the open social web",

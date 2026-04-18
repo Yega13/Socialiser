@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { GoogleAnalytics } from "@next/third-parties/google";
 import { SITE_CONFIG } from "@/lib/constants";
-import { BackToTop } from "@/components/ui/back-to-top";
 import { SparkWrapper } from "@/components/ui/spark-wrapper";
 import "./globals.css";
 
@@ -75,7 +74,6 @@ export default function RootLayout({
       <body className="antialiased">
         <SparkWrapper>
           {children}
-          <BackToTop />
         </SparkWrapper>
         {gaId && <GoogleAnalytics gaId={gaId} />}
       </body>
