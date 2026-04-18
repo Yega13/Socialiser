@@ -47,11 +47,20 @@ type FbContainerState = {
   ready: boolean;
 };
 
+type MastodonPreparedState = {
+  // Indexed by media position; null = not yet uploaded (retry next run)
+  mediaIds?: (string | null)[];
+  // Indexed same as mediaIds; true = Mastodon finished processing
+  mediaReady?: boolean[];
+  ready: boolean;
+};
+
 type PreparedContainers = {
   instagram?: IgContainerState;
   threads?: ThreadsContainerState;
   bluesky?: BskyPreparedState;
   facebook?: FbContainerState;
+  mastodon?: MastodonPreparedState;
   _errors?: Record<string, string>; // per-platform prep errors
 };
 
@@ -830,6 +839,61 @@ export default async function CronPage({
       }
     }
 
+    // ── Mastodon preparation ──
+    const hasMastodon = (post.platforms as string[]).includes("mastodon");
+    if (hasMastodon) {
+      const conn = connPlatforms?.find((c: Row) => c.platform === "mastodon");
+      if (!conn) {
+        prepErrors.mastodon = "Not connected";
+      } else {
+        const instance = (conn.refresh_token as string | undefined)?.replace(/\/+$/, "");
+        const mToken = conn.access_token as string;
+        if (!instance) {
+          prepErrors.mastodon = "Instance missing. Reconnect.";
+        } else if (!post.media_urls || (post.media_urls as string[]).length === 0) {
+          preparedContainers.mastodon = { ready: true };
+          log.push(`"${post.title}" Mastodon text: ready`);
+        } else {
+          const urls = post.media_urls as string[];
+          const mediaTypes = (post.media_types as string[] | null) ?? [];
+          const resolved = await Promise.all(urls.slice(0, 4).map((stored) => resolve(stored)));
+          const mediaIds: (string | null)[] = new Array(resolved.length).fill(null);
+          const mediaReady: boolean[] = new Array(resolved.length).fill(false);
+
+          await Promise.all(resolved.map(async (url, i) => {
+            if (!url) return;
+            try {
+              const fileRes = await timedFetch(url, undefined, 15_000);
+              if (!fileRes.ok) return;
+              const buf = await fileRes.arrayBuffer();
+              const form = new FormData();
+              const mime = mediaTypes[i] || "application/octet-stream";
+              form.append("file", new Blob([buf], { type: mime }), `media-${i}`);
+              const r = await timedFetch(`${instance}/api/v2/media`, {
+                method: "POST",
+                headers: { Authorization: `Bearer ${mToken}` },
+                body: form,
+              }, 25_000);
+              if (r.ok || r.status === 202) {
+                const d = await r.json().catch(() => ({}));
+                if (d?.id) {
+                  mediaIds[i] = String(d.id);
+                  mediaReady[i] = r.status === 200;
+                }
+              } else if (r.status === 401 || r.status === 403) {
+                prepErrors.mastodon = `Token invalid (${r.status}). Reconnect.`;
+              }
+            } catch { /* leave null, POLL retries */ }
+          }));
+
+          const uploadedCount = mediaIds.filter((id) => id !== null).length;
+          const allReady = mediaIds.every((id, i) => id !== null && mediaReady[i]);
+          preparedContainers.mastodon = { mediaIds, mediaReady, ready: allReady };
+          log.push(`"${post.title}" Mastodon: ${uploadedCount}/${mediaIds.length} uploaded, ${mediaReady.filter(Boolean).length} ready`);
+        }
+      }
+    }
+
     // Store per-platform errors for the PUBLISH step
     if (Object.keys(prepErrors).length > 0) {
       preparedContainers._errors = prepErrors;
@@ -841,7 +905,8 @@ export default async function CronPage({
       (hasIg && !prepErrors.instagram && preparedContainers.instagram && !preparedContainers.instagram.ready) ||
       (hasThreads && !prepErrors.threads && preparedContainers.threads && !preparedContainers.threads.ready) ||
       (hasBluesky && !prepErrors.bluesky && preparedContainers.bluesky && !preparedContainers.bluesky.ready) ||
-      (hasFacebook && !prepErrors.facebook && preparedContainers.facebook && !preparedContainers.facebook.ready);
+      (hasFacebook && !prepErrors.facebook && preparedContainers.facebook && !preparedContainers.facebook.ready) ||
+      (hasMastodon && !prepErrors.mastodon && preparedContainers.mastodon && !preparedContainers.mastodon.ready);
 
     // Check if EVERY selected platform failed during prepare
     // (if only some failed, let the survivors proceed through POLL/PUBLISH)
@@ -908,6 +973,7 @@ export default async function CronPage({
     const threadsState = containers.threads;
     const bskyState = containers.bluesky;
     const fbState = containers.facebook;
+    const mastoState = containers.mastodon;
 
     const { data: connPlatforms } = await supabase
       .from("connected_platforms")
@@ -921,11 +987,12 @@ export default async function CronPage({
     const hasThreadsInPost = (post.platforms as string[]).includes("threads");
     const hasBskyInPost = (post.platforms as string[]).includes("bluesky");
     const hasFbInPost = (post.platforms as string[]).includes("facebook");
+    const hasMastoInPost = (post.platforms as string[]).includes("mastodon");
 
     // Check if PREPARE didn't finish at all (no containers AND no errors — means crash)
     // Applies to ANY post regardless of which platforms — Threads-only / Bluesky-only included
-    const hasAnyState = !!igState || !!threadsState || !!bskyState || !!fbState;
-    const needsAnyPrep = hasIgInPost || hasThreadsInPost || hasBskyInPost || hasFbInPost;
+    const hasAnyState = !!igState || !!threadsState || !!bskyState || !!fbState || !!mastoState;
+    const needsAnyPrep = hasIgInPost || hasThreadsInPost || hasBskyInPost || hasFbInPost || hasMastoInPost;
     if (needsAnyPrep && !hasAnyState && Object.keys(pollPrepErrors).length === 0) {
       await supabase.from("scheduled_posts").update({ status: "pending" }).eq("id", post.id);
       log.push(`"${post.title}": containers missing, reset to pending for retry`);
@@ -1199,7 +1266,82 @@ export default async function CronPage({
       }
     }
 
-    const allReady = igReady && threadsReady && bskyReady && fbReady;
+    // ── Poll Mastodon (retry missing media uploads + check processing) ──
+    let mastoReady = !hasMastoInPost || !!pollPrepErrors.mastodon || (mastoState?.ready ?? false);
+    if (!error && hasMastoInPost && mastoState && !mastoState.ready) {
+      try {
+        const conn = connPlatforms?.find((c: Row) => c.platform === "mastodon");
+        if (!conn) {
+          log.push(`"${post.title}" Mastodon: not connected, marking done`);
+          containers.mastodon = { ...mastoState, ready: true };
+          mastoReady = true;
+        } else {
+          const instance = (conn.refresh_token as string | undefined)?.replace(/\/+$/, "");
+          const mToken = conn.access_token as string;
+          if (!instance) {
+            log.push(`"${post.title}" Mastodon: instance missing`);
+            containers.mastodon = { ...mastoState, ready: true };
+            mastoReady = true;
+          } else {
+            const mediaIds = [...(mastoState.mediaIds ?? [])];
+            const mediaReady = [...(mastoState.mediaReady ?? mediaIds.map(() => false))];
+            const urls = (post.media_urls as string[]) ?? [];
+            const mediaTypes = (post.media_types as string[] | null) ?? [];
+
+            // Retry null uploads
+            await Promise.all(mediaIds.map(async (id, i) => {
+              if (id) return;
+              const stored = urls[i];
+              if (!stored) return;
+              const fileUrl = await resolve(stored);
+              if (!fileUrl) return;
+              try {
+                const fileRes = await timedFetch(fileUrl, undefined, 15_000);
+                if (!fileRes.ok) return;
+                const buf = await fileRes.arrayBuffer();
+                const form = new FormData();
+                const mime = mediaTypes[i] || "application/octet-stream";
+                form.append("file", new Blob([buf], { type: mime }), `media-${i}`);
+                const r = await timedFetch(`${instance}/api/v2/media`, {
+                  method: "POST",
+                  headers: { Authorization: `Bearer ${mToken}` },
+                  body: form,
+                }, 25_000);
+                if (r.ok || r.status === 202) {
+                  const d = await r.json().catch(() => ({}));
+                  if (d?.id) {
+                    mediaIds[i] = String(d.id);
+                    mediaReady[i] = r.status === 200;
+                  }
+                }
+              } catch { /* retry next run */ }
+            }));
+
+            // Check processing for uploaded-but-not-ready
+            await Promise.all(mediaIds.map(async (id, i) => {
+              if (!id || mediaReady[i]) return;
+              try {
+                const sRes = await timedFetch(
+                  `${instance}/api/v1/media/${encodeURIComponent(id)}`,
+                  { headers: { Authorization: `Bearer ${mToken}` } },
+                  8_000
+                );
+                if (sRes.status === 200) mediaReady[i] = true;
+              } catch { /* retry next run */ }
+            }));
+
+            const allMediaReady = mediaIds.every((id, i) => id !== null && mediaReady[i]);
+            containers.mastodon = { mediaIds, mediaReady, ready: allMediaReady };
+            mastoReady = allMediaReady;
+            log.push(`"${post.title}" Mastodon poll: ${mediaIds.filter(Boolean).length}/${mediaIds.length} uploaded, ${mediaReady.filter(Boolean).length} ready`);
+          }
+        }
+      } catch (err) {
+        log.push(`"${post.title}" Mastodon POLL exception: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const allReady = igReady && threadsReady && bskyReady && fbReady && mastoReady;
 
     if (error) {
       const failResults: Record<string, { success: boolean; error?: string }> = {};
@@ -1217,7 +1359,7 @@ export default async function CronPage({
         .from("scheduled_posts")
         .update({ prepared_containers: containers })
         .eq("id", post.id);
-      log.push(`"${post.title}": still preparing (ig:${igReady} threads:${threadsReady} bsky:${bskyReady} fb:${fbReady})`);
+      log.push(`"${post.title}": still preparing (ig:${igReady} threads:${threadsReady} bsky:${bskyReady} fb:${fbReady} masto:${mastoReady})`);
     }
   }
 
@@ -1432,6 +1574,37 @@ export default async function CronPage({
           }
 
           return { platformId, success: false, error: "Unknown Facebook state" };
+        } catch (err) {
+          return { platformId, success: false, error: err instanceof Error ? err.message : String(err) };
+        }
+      }
+
+      // ── Publish Mastodon (one fast call — media pre-uploaded in PREPARE/POLL) ──
+      if (platformId === "mastodon") {
+        try {
+          const instance = (conn.refresh_token as string | undefined)?.replace(/\/+$/, "");
+          if (!instance) return { platformId, success: false, error: "Mastodon instance missing" };
+          const mastoPrep = containers.mastodon;
+          const mediaIds = (mastoPrep?.mediaIds ?? []).filter((id): id is string => !!id);
+          const text = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+          const body: Record<string, unknown> = { status: text, visibility: "public" };
+          if (mediaIds.length > 0) body.media_ids = mediaIds;
+          const r = await timedFetch(`${instance}/api/v1/statuses`, {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json",
+              "Idempotency-Key": `sch-${post.id}`,
+            },
+            body: JSON.stringify(body),
+          }, 15_000);
+          if (!r.ok) {
+            const err = await r.text().catch(() => "");
+            return { platformId, success: false, error: `HTTP ${r.status}: ${err.slice(0, 150)}` };
+          }
+          const d = await r.json().catch(() => ({}));
+          if (!d?.id) return { platformId, success: false, error: "No status id returned" };
+          return { platformId, success: true };
         } catch (err) {
           return { platformId, success: false, error: err instanceof Error ? err.message : String(err) };
         }

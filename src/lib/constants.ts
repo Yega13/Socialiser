@@ -71,15 +71,6 @@ export const PLATFORMS = [
     comingSoon: false,
   },
   {
-    id: "vk",
-    name: "VK",
-    description: "Post to VK communities",
-    icon: "VK",
-    color: "#0077FF",
-    textColor: "#F9F9F7",
-    comingSoon: true,
-  },
-  {
     id: "pinterest",
     name: "Pinterest",
     description: "Pin images & ideas",
@@ -104,16 +95,7 @@ export const PLATFORMS = [
     icon: "M",
     color: "#6364FF",
     textColor: "#F9F9F7",
-    comingSoon: true,
-  },
-  {
-    id: "reddit",
-    name: "Reddit",
-    description: "Post to subreddits",
-    icon: "R",
-    color: "#FF4500",
-    textColor: "#F9F9F7",
-    comingSoon: true,
+    comingSoon: false,
   },
 ] as const;
 

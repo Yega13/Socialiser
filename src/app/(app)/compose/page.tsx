@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook, uploadMastodonMedia, checkMastodonMedia, postToMastodonServer } from "./actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
 import { resolveBlueskyPDS } from "@/lib/bluesky";
@@ -330,7 +330,8 @@ export default function ComposePage() {
     mediaItems.forEach((item) => URL.revokeObjectURL(item.preview));
 
     const newItems: MediaItem[] = [];
-    const maxFiles = threadsSelected ? 20 : instagramSelected ? 10 : facebookSelected ? 10 : blueskySelected ? 4 : 1;
+    const mastodonSelected = selected.includes("mastodon");
+    const maxFiles = threadsSelected ? 20 : instagramSelected ? 10 : facebookSelected ? 10 : blueskySelected ? 4 : mastodonSelected ? 4 : 1;
     const filesToAdd = Array.from(files).slice(0, maxFiles);
 
     for (const file of filesToAdd) {
@@ -607,6 +608,47 @@ export default function ComposePage() {
         }
 
         return [platformId, await postToBlueskyServer(accessToken, conn.platform_user_id!, postText, bskyImageBlobs, bskyVideoBlob, pdsEndpoint)];
+      }
+
+      // ── Mastodon ──
+      if (platformId === "mastodon") {
+        const postText = `${title}${description ? "\n\n" + description : ""}`;
+        const instance = (conn.refresh_token as string | undefined)?.replace(/\/+$/, "") || "";
+        if (!instance) return [platformId, { success: false, error: "Mastodon instance missing. Reconnect in Settings." }];
+
+        const mediaIds: string[] = [];
+        if (mediaItems.length > 0) {
+          setPostingStatus("Uploading media to Mastodon...");
+          for (const item of mediaItems.slice(0, 4)) {
+            const buf = await item.file.arrayBuffer();
+            const form = new FormData();
+            form.append("file", new Blob([buf], { type: item.file.type }), item.file.name);
+            const res = await fetch(`${instance}/api/v2/media`, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${accessToken}` },
+              body: form,
+            });
+            if (!res.ok && res.status !== 202) {
+              const err = await res.text().catch(() => "");
+              return [platformId, { success: false, error: `Media upload failed (${res.status}): ${err.slice(0, 150)}` }];
+            }
+            const data = await res.json();
+            if (!data?.id) return [platformId, { success: false, error: "Mastodon returned no media id" }];
+            let mediaId: string = String(data.id);
+            if (res.status === 202) {
+              setPostingStatus("Processing media...");
+              for (let attempt = 0; attempt < 10; attempt++) {
+                await new Promise((r) => setTimeout(r, 1500));
+                const state = await checkMastodonMedia(instance, accessToken, mediaId);
+                if (state === "ready") break;
+                if (state === "error") return [platformId, { success: false, error: "Mastodon media processing failed" }];
+              }
+            }
+            mediaIds.push(mediaId);
+          }
+        }
+
+        return [platformId, await postToMastodonServer(instance, accessToken, postText, mediaIds)];
       }
 
       return [platformId, { success: false, error: "Unknown platform" }];
