@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook, uploadMastodonMedia, checkMastodonMedia, postToMastodonServer } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, refreshTikTokToken, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook, uploadMastodonMedia, checkMastodonMedia, postToMastodonServer, postToTikTokServer, checkTikTokPublishStatus } from "./actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
 import { resolveBlueskyPDS } from "@/lib/bluesky";
@@ -418,13 +418,22 @@ export default function ComposePage() {
             refresh_token: result.refreshJwt,
             token_expires_at: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
           }).eq("id", conn.id);
+        } else if (platformId === "tiktok" && conn.refresh_token) {
+          const result = await refreshTikTokToken(conn.refresh_token);
+          if (!result) return { error: "TikTok token expired. Reconnect in Settings." };
+          accessToken = result.access_token;
+          await supabase.from("connected_platforms").update({
+            access_token: result.access_token,
+            refresh_token: result.refresh_token,
+            token_expires_at: new Date(Date.now() + result.expires_in * 1000).toISOString(),
+          }).eq("id", conn.id);
         }
       }
       return { token: accessToken };
     }
 
-    // Pre-upload media to Supabase once (shared by Instagram + Threads + Facebook)
-    const supabaseNeeded = (selected.includes("instagram") || selected.includes("threads") || selected.includes("facebook")) && mediaItems.length > 0;
+    // Pre-upload media to Supabase once (shared by Instagram + Threads + Facebook + TikTok)
+    const supabaseNeeded = (selected.includes("instagram") || selected.includes("threads") || selected.includes("facebook") || selected.includes("tiktok")) && mediaItems.length > 0;
     let sharedMediaUrls: { url: string; isVideo: boolean }[] | null = null;
     let sharedUploadError: string | null = null;
 
@@ -657,6 +666,37 @@ export default function ComposePage() {
         return [platformId, await postToMastodonServer(instance, accessToken, postText, mediaIds)];
       }
 
+      // ── TikTok ──
+      if (platformId === "tiktok") {
+        const videoItem = mediaItems.find((m) => m.file.type.startsWith("video/"));
+        if (!videoItem) return [platformId, { success: false, error: "TikTok requires a video file" }];
+        if (sharedUploadError) return [platformId, { success: false, error: sharedUploadError }];
+        if (!sharedMediaUrls) return [platformId, { success: false, error: "Media upload failed" }];
+        const videoUrl = sharedMediaUrls.find((m) => m.isVideo)?.url;
+        if (!videoUrl) return [platformId, { success: false, error: "Video URL missing" }];
+
+        const caption = `${title}${description ? "\n\n" + description : ""}`;
+        setPostingStatus("Uploading video to TikTok...");
+        const initResult = await postToTikTokServer(accessToken, videoUrl, caption, "SELF_ONLY");
+        if (!initResult.success || !initResult.publish_id) {
+          return [platformId, { success: false, error: initResult.error || "TikTok upload failed" }];
+        }
+
+        // Poll status for up to ~90s — TikTok ingests the video asynchronously
+        for (let i = 0; i < 30; i++) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const st = await checkTikTokPublishStatus(accessToken, initResult.publish_id);
+          if (st.status === "PUBLISH_COMPLETE" || st.status === "SEND_TO_USER_INBOX") {
+            return [platformId, { success: true }];
+          }
+          if (st.status === "FAILED") {
+            return [platformId, { success: false, error: st.fail_reason || "TikTok publish failed" }];
+          }
+        }
+        // Kick back control with "processing" success — TikTok will finish in its own time
+        return [platformId, { success: true, error: "Upload accepted — TikTok is still processing in the background" }];
+      }
+
       return [platformId, { success: false, error: "Unknown platform" }];
     });
 
@@ -813,7 +853,8 @@ export default function ComposePage() {
   const blueskySelected = selected.includes("bluesky");
   const threadsSelected = selected.includes("threads");
   const facebookSelected = selected.includes("facebook");
-  const needsMedia = youtubeSelected || instagramSelected;
+  const tiktokSelected = selected.includes("tiktok");
+  const needsMedia = youtubeSelected || instagramSelected || tiktokSelected;
   const showMediaPicker = needsMedia || blueskySelected || threadsSelected || facebookSelected;
   const hasAnyPadding = mediaItems.some((m) => m.needsPadding && !m.file.type.startsWith("video/"));
   const hasVideo = mediaItems.some((m) => m.file.type.startsWith("video/"));
@@ -821,18 +862,26 @@ export default function ComposePage() {
   const imageCount = mediaItems.filter((m) => m.file.type.startsWith("image/")).length;
   const facebookMixedMedia = facebookSelected && videoCount > 0 && imageCount > 0;
   const facebookMultipleVideos = facebookSelected && videoCount > 1;
+  const tiktokNoVideo = tiktokSelected && mediaItems.length > 0 && !hasVideo;
+  const tiktokMultipleVideos = tiktokSelected && videoCount > 1;
   const canPost =
     !isPosting &&
     selected.length > 0 &&
     title.trim().length > 0 &&
     (!needsMedia || mediaItems.length > 0) &&
     (!youtubeSelected || hasVideo) &&
+    (!tiktokSelected || hasVideo) &&
     !facebookMixedMedia &&
     !facebookMultipleVideos &&
+    !tiktokMultipleVideos &&
     (!scheduleEnabled || scheduleDate.length > 0);
   const postBlockReason =
     youtubeSelected && !hasVideo && mediaItems.length > 0
       ? "YouTube requires video — deselect YouTube or upload a video"
+      : tiktokNoVideo
+      ? "TikTok requires a video — upload one or deselect TikTok"
+      : tiktokMultipleVideos
+      ? "TikTok supports only one video per post — remove extras or deselect TikTok"
       : facebookMixedMedia
       ? "Facebook can't mix images and videos — remove one type or deselect Facebook"
       : facebookMultipleVideos
@@ -841,7 +890,7 @@ export default function ComposePage() {
       ? "Pick a date & time to schedule"
       : null;
 
-  const acceptTypes = youtubeSelected && !instagramSelected
+  const acceptTypes = (youtubeSelected || tiktokSelected) && !instagramSelected && !blueskySelected && !threadsSelected && !facebookSelected
     ? "video/*"
     : "image/*,video/*";
 
@@ -927,6 +976,11 @@ export default function ComposePage() {
           {facebookSelected && mediaItems.length > 1 && hasVideo && mediaItems.some((m) => m.file.type.startsWith("image/")) && (
             <p className="text-xs text-[#FF4F4F] font-bold mt-2">
               Facebook can&apos;t mix images and video — pick one or the other.
+            </p>
+          )}
+          {tiktokSelected && mediaItems.length > 0 && imageCount > 0 && (
+            <p className="text-xs text-[#FF4F4F] font-bold mt-2">
+              TikTok only supports video — images will be skipped on TikTok.
             </p>
           )}
         </div>
@@ -1409,6 +1463,19 @@ export default function ComposePage() {
                     Facebook Preview
                   </button>
                 )}
+                {tiktokSelected && (
+                  <button
+                    onClick={() => setPreviewTab("tiktok")}
+                    className={cn(
+                      "flex-1 px-3 py-2 text-xs font-bold border border-[#0A0A0A] transition-all",
+                      previewTab === "tiktok"
+                        ? "bg-[#010101] text-white shadow-[2px_2px_0px_0px_#0A0A0A]"
+                        : "bg-white text-[#0A0A0A] hover:bg-[#F0F0F0]"
+                    )}
+                  >
+                    TikTok Preview
+                  </button>
+                )}
                 {selected.includes("mastodon") && (
                   <button
                     onClick={() => setPreviewTab("mastodon")}
@@ -1853,6 +1920,45 @@ export default function ComposePage() {
             )}
 
             {/* ── Mastodon Preview ── */}
+            {(selected.length === 1 ? tiktokSelected : previewTab === "tiktok" && tiktokSelected) && (
+              <div className="border border-[#0A0A0A] bg-[#010101] overflow-hidden shadow-[2px_2px_0px_0px_#0A0A0A] text-white">
+                <div className="flex items-center gap-2.5 px-3 py-2.5 border-b border-[#2A2A28]">
+                  <div className="w-9 h-9 rounded-full bg-gradient-to-br from-[#25F4EE] to-[#FE2C55] flex items-center justify-center text-white text-xs font-black">
+                    T
+                  </div>
+                  <div>
+                    <div className="text-[13px] font-semibold">
+                      {connected.find((c) => c.platform === "tiktok")?.platform_username ?? "@you"}
+                    </div>
+                    <div className="text-[10px] text-[#888]">just now</div>
+                  </div>
+                </div>
+                {currentPreview && currentPreview.file.type.startsWith("video/") ? (
+                  <video
+                    src={currentPreview.preview}
+                    className="w-full bg-black"
+                    style={{ aspectRatio: "9/16", objectFit: "cover" }}
+                    muted
+                  />
+                ) : (
+                  <div className="w-full bg-[#0A0A0A] flex items-center justify-center text-[#888] text-xs font-bold" style={{ aspectRatio: "9/16" }}>
+                    TikTok needs a video
+                  </div>
+                )}
+                <div className="px-3 py-2">
+                  <p className="text-[13px] whitespace-pre-wrap break-words leading-[1.4]">
+                    {title}{description ? `\n\n${description}` : ""}
+                  </p>
+                  <p className="text-[10px] text-[#888] mt-1">
+                    {(`${title}${description ? "\n\n" + description : ""}`).length}/2200 characters
+                  </p>
+                  <p className="text-[10px] text-[#FE2C55] font-bold mt-1">
+                    Post will be private (Only Me) until your TikTok app is audited.
+                  </p>
+                </div>
+              </div>
+            )}
+
             {(selected.length === 1 ? selected.includes("mastodon") : previewTab === "mastodon" && selected.includes("mastodon")) && (
               <div className="border border-[#0A0A0A] bg-white overflow-hidden shadow-[2px_2px_0px_0px_#0A0A0A]">
                 {/* Header */}

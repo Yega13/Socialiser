@@ -3,7 +3,7 @@ export const SITE_CONFIG = {
   description: "Cross-post to every platform with one click. Grow your audience everywhere, effortlessly.",
   url: process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
   ogImage: "/og.png",
-  keywords: ["social media", "cross-posting", "content creator", "social media management", "Twitter", "LinkedIn", "Instagram"],
+  keywords: ["social media", "cross-posting", "content creator", "social media management", "Twitter", "TikTok", "Instagram"],
 };
 
 export const PLATFORMS = [
@@ -22,15 +22,6 @@ export const PLATFORMS = [
     description: "Post threads & updates",
     icon: "𝕏",
     color: "#000000",
-    textColor: "#F9F9F7",
-    comingSoon: true,
-  },
-  {
-    id: "linkedin",
-    name: "LinkedIn",
-    description: "Share professional content",
-    icon: "in",
-    color: "#0A66C2",
     textColor: "#F9F9F7",
     comingSoon: true,
   },
@@ -59,7 +50,7 @@ export const PLATFORMS = [
     icon: "TK",
     color: "#010101",
     textColor: "#F9F9F7",
-    comingSoon: true,
+    comingSoon: false,
   },
   {
     id: "facebook",

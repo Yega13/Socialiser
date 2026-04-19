@@ -59,12 +59,21 @@ type MastodonPreparedState = {
   ready: boolean;
 };
 
+type TikTokPreparedState = {
+  publishId?: string;
+  uploaded?: boolean; // bytes PUT to upload_url successfully
+  ready: boolean; // terminal status reached (PUBLISH_COMPLETE or SEND_TO_USER_INBOX)
+  finalStatus?: string;
+  failReason?: string;
+};
+
 type PreparedContainers = {
   instagram?: IgContainerState;
   threads?: ThreadsContainerState;
   bluesky?: BskyPreparedState;
   facebook?: FbContainerState;
   mastodon?: MastodonPreparedState;
+  tiktok?: TikTokPreparedState;
   _errors?: Record<string, string>; // per-platform prep errors
 };
 
@@ -141,6 +150,34 @@ async function refreshThreadsToken(
     };
   }
   return null;
+}
+
+async function refreshTikTokToken(
+  refreshToken: string
+): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
+  const clientKey = process.env.TIKTOK_CLIENT_KEY ?? "";
+  const clientSecret = process.env.TIKTOK_CLIENT_SECRET ?? "";
+  if (!clientKey || !clientSecret) return null;
+  const res = await timedFetch("https://open.tiktokapis.com/v2/oauth/token/", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      "Cache-Control": "no-cache",
+    },
+    body: new URLSearchParams({
+      client_key: clientKey,
+      client_secret: clientSecret,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data.access_token) return null;
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token ?? refreshToken,
+    expires_in: data.expires_in ?? 86400,
+  };
 }
 
 // ── Instagram API helpers ────────────────────────────────────────────────────
@@ -346,6 +383,24 @@ export default async function CronPage({
             .eq("id", conn.id);
           return data.accessJwt;
         }
+      }
+      return null;
+    }
+
+    if (platformId === "tiktok" && conn.refresh_token) {
+      const refreshed = await refreshTikTokToken(conn.refresh_token as string);
+      if (refreshed) {
+        await supabase
+          .from("connected_platforms")
+          .update({
+            access_token: refreshed.access_token,
+            refresh_token: refreshed.refresh_token,
+            token_expires_at: new Date(
+              Date.now() + refreshed.expires_in * 1000
+            ).toISOString(),
+          })
+          .eq("id", conn.id);
+        return refreshed.access_token;
       }
       return null;
     }
@@ -909,6 +964,118 @@ export default async function CronPage({
       }
     }
 
+    // ── TikTok preparation ──
+    // Init video post + PUT video bytes to the returned upload_url.
+    // POLL then watches status/fetch until PUBLISH_COMPLETE or SEND_TO_USER_INBOX.
+    const hasTikTok = (post.platforms as string[]).includes("tiktok");
+    if (hasTikTok) {
+      const conn = connPlatforms?.find((c: Row) => c.platform === "tiktok");
+      if (!conn) {
+        prepErrors.tiktok = "Not connected";
+      } else {
+        const ttToken = await getFreshToken(conn, "tiktok");
+        if (!ttToken) {
+          prepErrors.tiktok = "Token refresh failed — reconnect TikTok";
+        } else {
+          const mediaTypes = (post.media_types as string[] | null) ?? [];
+          const videoIdx = mediaTypes.findIndex((t) => t.startsWith("video/"));
+          if (videoIdx < 0 || !(post.media_urls as string[] | null)?.[videoIdx]) {
+            prepErrors.tiktok = "TikTok requires a video";
+          } else {
+            const videoUrl = await resolve((post.media_urls as string[])[videoIdx]);
+            if (!videoUrl) {
+              prepErrors.tiktok = "Failed to resolve video URL";
+            } else {
+              try {
+                const fileRes = await timedFetch(videoUrl, undefined, 25_000);
+                if (!fileRes.ok) {
+                  prepErrors.tiktok = `Fetch video failed (${fileRes.status})`;
+                } else {
+                  const buf = await fileRes.arrayBuffer();
+                  const videoSize = buf.byteLength;
+                  if (videoSize === 0) {
+                    prepErrors.tiktok = "Video is empty";
+                  } else if (videoSize > 4 * 1024 * 1024 * 1024) {
+                    prepErrors.tiktok = "Video exceeds 4GB TikTok limit";
+                  } else {
+                    const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+                    const initRes = await timedFetch(
+                      "https://open.tiktokapis.com/v2/post/publish/video/init/",
+                      {
+                        method: "POST",
+                        headers: {
+                          Authorization: `Bearer ${ttToken}`,
+                          "Content-Type": "application/json; charset=UTF-8",
+                        },
+                        body: JSON.stringify({
+                          post_info: {
+                            title: caption.slice(0, 2200),
+                            privacy_level: "SELF_ONLY",
+                            disable_duet: false,
+                            disable_comment: false,
+                            disable_stitch: false,
+                            video_cover_timestamp_ms: 1000,
+                          },
+                          source_info: {
+                            source: "FILE_UPLOAD",
+                            video_size: videoSize,
+                            chunk_size: videoSize,
+                            total_chunk_count: 1,
+                          },
+                        }),
+                      },
+                      15_000
+                    );
+                    const initData = await initRes.json().catch(() => ({}));
+                    if (!initRes.ok || initData?.error?.code !== "ok") {
+                      prepErrors.tiktok = `Init failed: ${initData?.error?.message || initData?.error?.code || `HTTP ${initRes.status}`}`;
+                    } else {
+                      const publishId = initData?.data?.publish_id as string | undefined;
+                      const uploadUrl = initData?.data?.upload_url as string | undefined;
+                      if (!publishId || !uploadUrl) {
+                        prepErrors.tiktok = "Init response missing publish_id or upload_url";
+                      } else {
+                        const putRes = await timedFetch(
+                          uploadUrl,
+                          {
+                            method: "PUT",
+                            headers: {
+                              "Content-Type": mediaTypes[videoIdx] || "video/mp4",
+                              "Content-Length": String(videoSize),
+                              "Content-Range": `bytes 0-${videoSize - 1}/${videoSize}`,
+                            },
+                            body: buf,
+                          },
+                          25_000
+                        );
+                        if (!putRes.ok && putRes.status !== 201) {
+                          preparedContainers.tiktok = {
+                            publishId,
+                            uploaded: false,
+                            ready: false,
+                          };
+                          log.push(`"${post.title}" TikTok upload fail (${putRes.status}) — POLL will retry status`);
+                        } else {
+                          preparedContainers.tiktok = {
+                            publishId,
+                            uploaded: true,
+                            ready: false,
+                          };
+                          log.push(`"${post.title}" TikTok uploaded: ${publishId}`);
+                        }
+                      }
+                    }
+                  }
+                }
+              } catch (err) {
+                prepErrors.tiktok = err instanceof Error ? err.message : String(err);
+              }
+            }
+          }
+        }
+      }
+    }
+
     // Store per-platform errors for the PUBLISH step
     if (Object.keys(prepErrors).length > 0) {
       preparedContainers._errors = prepErrors;
@@ -921,7 +1088,8 @@ export default async function CronPage({
       (hasThreads && !prepErrors.threads && preparedContainers.threads && !preparedContainers.threads.ready) ||
       (hasBluesky && !prepErrors.bluesky && preparedContainers.bluesky && !preparedContainers.bluesky.ready) ||
       (hasFacebook && !prepErrors.facebook && preparedContainers.facebook && !preparedContainers.facebook.ready) ||
-      (hasMastodon && !prepErrors.mastodon && preparedContainers.mastodon && !preparedContainers.mastodon.ready);
+      (hasMastodon && !prepErrors.mastodon && preparedContainers.mastodon && !preparedContainers.mastodon.ready) ||
+      (hasTikTok && !prepErrors.tiktok && preparedContainers.tiktok && !preparedContainers.tiktok.ready);
 
     // Check if EVERY selected platform failed during prepare
     // (if only some failed, let the survivors proceed through POLL/PUBLISH)
@@ -989,6 +1157,7 @@ export default async function CronPage({
     const bskyState = containers.bluesky;
     const fbState = containers.facebook;
     const mastoState = containers.mastodon;
+    const tiktokState = containers.tiktok;
 
     const { data: connPlatforms } = await supabase
       .from("connected_platforms")
@@ -1003,11 +1172,12 @@ export default async function CronPage({
     const hasBskyInPost = (post.platforms as string[]).includes("bluesky");
     const hasFbInPost = (post.platforms as string[]).includes("facebook");
     const hasMastoInPost = (post.platforms as string[]).includes("mastodon");
+    const hasTikTokInPost = (post.platforms as string[]).includes("tiktok");
 
     // Check if PREPARE didn't finish at all (no containers AND no errors — means crash)
     // Applies to ANY post regardless of which platforms — Threads-only / Bluesky-only included
-    const hasAnyState = !!igState || !!threadsState || !!bskyState || !!fbState || !!mastoState;
-    const needsAnyPrep = hasIgInPost || hasThreadsInPost || hasBskyInPost || hasFbInPost || hasMastoInPost;
+    const hasAnyState = !!igState || !!threadsState || !!bskyState || !!fbState || !!mastoState || !!tiktokState;
+    const needsAnyPrep = hasIgInPost || hasThreadsInPost || hasBskyInPost || hasFbInPost || hasMastoInPost || hasTikTokInPost;
     if (needsAnyPrep && !hasAnyState && Object.keys(pollPrepErrors).length === 0) {
       await supabase.from("scheduled_posts").update({ status: "pending" }).eq("id", post.id);
       log.push(`"${post.title}": containers missing, reset to pending for retry`);
@@ -1362,7 +1532,64 @@ export default async function CronPage({
       }
     }
 
-    const allReady = igReady && threadsReady && bskyReady && fbReady && mastoReady;
+    // ── Poll TikTok status (status/fetch until PUBLISH_COMPLETE or SEND_TO_USER_INBOX) ──
+    let tiktokReady = !hasTikTokInPost || !!pollPrepErrors.tiktok || (tiktokState?.ready ?? false);
+    if (!error && hasTikTokInPost && tiktokState && !tiktokState.ready) {
+      try {
+        const conn = connPlatforms?.find((c: Row) => c.platform === "tiktok");
+        if (!conn) {
+          log.push(`"${post.title}" TikTok: not connected, marking done`);
+          containers.tiktok = { ...tiktokState, ready: true };
+          tiktokReady = true;
+        } else if (!tiktokState.publishId) {
+          // PREPARE never got a publish_id — mark done, will fail in PUBLISH
+          containers.tiktok = { ...tiktokState, ready: true };
+          tiktokReady = true;
+        } else {
+          const ttToken = await getFreshToken(conn, "tiktok");
+          if (!ttToken) {
+            log.push(`"${post.title}" TikTok: token refresh failed`);
+            containers.tiktok = { ...tiktokState, ready: true };
+            tiktokReady = true;
+          } else {
+            const sRes = await timedFetch(
+              "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
+              {
+                method: "POST",
+                headers: {
+                  Authorization: `Bearer ${ttToken}`,
+                  "Content-Type": "application/json; charset=UTF-8",
+                },
+                body: JSON.stringify({ publish_id: tiktokState.publishId }),
+              },
+              10_000
+            );
+            const sData = await sRes.json().catch(() => ({}));
+            const status = sData?.data?.status as string | undefined;
+            if (status === "PUBLISH_COMPLETE" || status === "SEND_TO_USER_INBOX") {
+              containers.tiktok = { ...tiktokState, ready: true, finalStatus: status };
+              tiktokReady = true;
+              log.push(`"${post.title}" TikTok ready: ${status}`);
+            } else if (status === "FAILED") {
+              containers.tiktok = {
+                ...tiktokState,
+                ready: true,
+                finalStatus: status,
+                failReason: sData?.data?.fail_reason || "publish failed",
+              };
+              tiktokReady = true;
+              log.push(`"${post.title}" TikTok failed: ${sData?.data?.fail_reason || "unknown"}`);
+            } else {
+              log.push(`"${post.title}" TikTok still ${status || "processing"}`);
+            }
+          }
+        }
+      } catch (err) {
+        log.push(`"${post.title}" TikTok POLL exception: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+
+    const allReady = igReady && threadsReady && bskyReady && fbReady && mastoReady && tiktokReady;
 
     if (error) {
       const failResults: Record<string, { success: boolean; error?: string }> = {};
@@ -1380,7 +1607,7 @@ export default async function CronPage({
         .from("scheduled_posts")
         .update({ prepared_containers: containers })
         .eq("id", post.id);
-      log.push(`"${post.title}": still preparing (ig:${igReady} threads:${threadsReady} bsky:${bskyReady} fb:${fbReady} masto:${mastoReady})`);
+      log.push(`"${post.title}": still preparing (ig:${igReady} threads:${threadsReady} bsky:${bskyReady} fb:${fbReady} masto:${mastoReady} tiktok:${tiktokReady})`);
     }
   }
 
@@ -1629,6 +1856,43 @@ export default async function CronPage({
         } catch (err) {
           return { platformId, success: false, error: err instanceof Error ? err.message : String(err) };
         }
+      }
+
+      // ── Publish TikTok (nothing to do — submitted in PREPARE, status confirmed in POLL) ──
+      if (platformId === "tiktok") {
+        const ttPrep = containers.tiktok;
+        if (!ttPrep) return { platformId, success: false, error: "No TikTok state — PREPARE skipped" };
+        if (!ttPrep.publishId) return { platformId, success: false, error: "Upload never initialized" };
+        if (ttPrep.finalStatus === "FAILED") {
+          return { platformId, success: false, error: ttPrep.failReason || "TikTok publish failed" };
+        }
+        if (ttPrep.finalStatus === "SEND_TO_USER_INBOX" || ttPrep.finalStatus === "PUBLISH_COMPLETE") {
+          return { platformId, success: true };
+        }
+        // POLL never confirmed — check once more synchronously
+        const sRes = await timedFetch(
+          "https://open.tiktokapis.com/v2/post/publish/status/fetch/",
+          {
+            method: "POST",
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Content-Type": "application/json; charset=UTF-8",
+            },
+            body: JSON.stringify({ publish_id: ttPrep.publishId }),
+          },
+          8_000
+        );
+        const sData = await sRes.json().catch(() => ({}));
+        const status = sData?.data?.status as string | undefined;
+        if (status === "PUBLISH_COMPLETE" || status === "SEND_TO_USER_INBOX") {
+          return { platformId, success: true };
+        }
+        if (status === "FAILED") {
+          return { platformId, success: false, error: sData?.data?.fail_reason || "publish failed" };
+        }
+        // Still processing — treat as success so user sees the upload went through;
+        // TikTok will finalize in the background
+        return { platformId, success: true, error: `Uploaded — still processing (${status || "unknown"})` };
       }
 
       // ── Upload to YouTube (no container system — upload happens at publish) ──

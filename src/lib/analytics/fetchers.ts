@@ -224,31 +224,49 @@ export async function fetchInstagramMetrics(
 // ── Threads ───────────────────────────────────────────────────────
 // Account insights: views, likes, replies, reposts, quotes, followers_count.
 // Requires threads_manage_insights scope.
+// Time-series metrics need since/until unix timestamps; followers_count is total_value only.
 export async function fetchThreadsMetrics(
   accessToken: string,
   threadsUserId: string
 ): Promise<Metrics> {
   try {
-    const res = await fetch(
-      `https://graph.threads.net/v1.0/${threadsUserId}/threads_insights?metric=views,likes,replies,reposts,quotes,followers_count&access_token=${encodeURIComponent(accessToken)}`,
-      { signal: timeout(TIMEOUT) }
-    );
-    if (!res.ok) return EMPTY_METRICS;
-    const data = await res.json();
+    const now = Math.floor(Date.now() / 1000);
+    const since = now - 30 * 86400;
+
+    const [seriesRes, followersRes] = await Promise.all([
+      fetch(
+        `https://graph.threads.net/v1.0/${threadsUserId}/threads_insights?metric=views,likes,replies,reposts,quotes&since=${since}&until=${now}&access_token=${encodeURIComponent(accessToken)}`,
+        { signal: timeout(TIMEOUT) }
+      ),
+      fetch(
+        `https://graph.threads.net/v1.0/${threadsUserId}/threads_insights?metric=followers_count&access_token=${encodeURIComponent(accessToken)}`,
+        { signal: timeout(TIMEOUT) }
+      ),
+    ]);
 
     const byName = new Map<string, number>();
-    for (const entry of data.data ?? []) {
-      const name = entry.name as string;
-      let val = 0;
-      if (name === "followers_count") {
-        val = Number(entry.total_value?.value) || 0;
-      } else {
+
+    if (seriesRes.ok) {
+      const seriesData = await seriesRes.json();
+      for (const entry of seriesData.data ?? []) {
+        const name = entry.name as string;
         const values = entry.values ?? [];
-        val = values.reduce((a: number, v: { value?: number }) => a + (Number(v.value) || 0), 0);
-        if (entry.total_value?.value != null) val = Number(entry.total_value.value) || val;
+        const fromValues = values.reduce(
+          (a: number, v: { value?: number }) => a + (Number(v.value) || 0),
+          0
+        );
+        const fromTotal = Number(entry.total_value?.value) || 0;
+        byName.set(name, fromTotal || fromValues);
       }
-      byName.set(name, val);
     }
+
+    if (followersRes.ok) {
+      const fData = await followersRes.json();
+      const entry = fData.data?.[0];
+      if (entry) byName.set("followers_count", Number(entry.total_value?.value) || 0);
+    }
+
+    if (!seriesRes.ok && !followersRes.ok) return EMPTY_METRICS;
 
     const shares = (byName.get("reposts") || 0) + (byName.get("quotes") || 0);
 

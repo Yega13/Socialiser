@@ -22,7 +22,7 @@ const features = [
   {
     icon: "🤖",
     title: "AI rewriting",
-    description: "Let AI adapt your post tone for LinkedIn vs Twitter vs Instagram.",
+    description: "Let AI adapt your post tone for TikTok vs Twitter vs Instagram.",
   },
   {
     icon: "🔒",

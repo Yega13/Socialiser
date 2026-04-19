@@ -7,6 +7,7 @@ import {
   refreshInstagramToken,
   refreshThreadsToken,
   refreshBlueskySession,
+  refreshTikTokToken,
   postToInstagramServer,
   postCarouselToInstagram,
   postToThreadsServer,
@@ -14,6 +15,8 @@ import {
   postToBlueskyServer,
   postToFacebookServer,
   postCarouselToFacebook,
+  postToTikTokServer,
+  checkTikTokPublishStatus,
 } from "@/app/(app)/compose/actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
@@ -221,6 +224,28 @@ export default function ScheduledPage() {
               results[platformId] = {
                 success: false,
                 error: "Bluesky session expired. Reconnect.",
+              };
+              continue;
+            }
+          } else if (platformId === "tiktok" && conn.refresh_token) {
+            setProcessingStatus("Refreshing TikTok token...");
+            const refreshed = await refreshTikTokToken(conn.refresh_token);
+            if (refreshed) {
+              accessToken = refreshed.access_token;
+              await supabase
+                .from("connected_platforms")
+                .update({
+                  access_token: refreshed.access_token,
+                  refresh_token: refreshed.refresh_token,
+                  token_expires_at: new Date(
+                    Date.now() + refreshed.expires_in * 1000
+                  ).toISOString(),
+                })
+                .eq("id", conn.id);
+            } else {
+              results[platformId] = {
+                success: false,
+                error: "TikTok token expired. Reconnect.",
               };
               continue;
             }
@@ -513,6 +538,42 @@ export default function ScheduledPage() {
               bskyVideoBlob
             );
           }
+        }
+
+        // ── TikTok ──
+        if (platformId === "tiktok") {
+          const videoIndex = (post.media_types as string[] | null)?.findIndex((t: string) => t.startsWith("video/"));
+          if (videoIndex === undefined || videoIndex === -1 || !post.media_urls?.[videoIndex]) {
+            results[platformId] = { success: false, error: "TikTok requires a video" };
+            continue;
+          }
+          setProcessingStatus("Uploading to TikTok...");
+          const signedUrl = await resolveToSignedUrl(supabase, post.media_urls[videoIndex]);
+          if (!signedUrl) {
+            results[platformId] = { success: false, error: "Failed to create signed URL for video" };
+            continue;
+          }
+          const caption = `${post.title}${post.description ? "\n\n" + post.description : ""}`;
+          const initResult = await postToTikTokServer(accessToken, signedUrl, caption, "SELF_ONLY");
+          if (!initResult.success || !initResult.publish_id) {
+            results[platformId] = { success: false, error: initResult.error || "TikTok upload failed" };
+            continue;
+          }
+          // Poll for completion — up to ~90s
+          let finalResult: { success: boolean; error?: string } = { success: true, error: "Uploaded — still processing on TikTok" };
+          for (let i = 0; i < 30; i++) {
+            await new Promise((r) => setTimeout(r, 3000));
+            const st = await checkTikTokPublishStatus(accessToken, initResult.publish_id);
+            if (st.status === "PUBLISH_COMPLETE" || st.status === "SEND_TO_USER_INBOX") {
+              finalResult = { success: true };
+              break;
+            }
+            if (st.status === "FAILED") {
+              finalResult = { success: false, error: st.fail_reason || "TikTok publish failed" };
+              break;
+            }
+          }
+          results[platformId] = finalResult;
         }
       }
 

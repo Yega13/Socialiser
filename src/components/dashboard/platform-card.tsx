@@ -195,6 +195,27 @@ export function PlatformCard({
         state: user.id,
       });
       window.location.href = `https://www.facebook.com/v23.0/dialog/oauth?${params}`;
+    } else if (platform.id === "tiktok") {
+      const { createClient } = await import("@/lib/supabase/client");
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { window.location.href = "/login"; return; }
+
+      const clientKey = process.env.NEXT_PUBLIC_TIKTOK_CLIENT_KEY ?? "";
+      if (!clientKey) {
+        window.location.href = "/dashboard?error=tiktok_not_configured";
+        return;
+      }
+
+      // csrf_state param is required by TikTok but also encodes our user id
+      const params = new URLSearchParams({
+        client_key: clientKey,
+        scope: "user.info.basic,video.publish,video.upload",
+        response_type: "code",
+        redirect_uri: `${window.location.origin}/tiktok-callback`,
+        state: user.id,
+      });
+      window.location.href = `https://www.tiktok.com/v2/auth/authorize/?${params}`;
     } else if (platform.id === "bluesky") {
       setShowBlueskyForm(true);
       setBskyError("");

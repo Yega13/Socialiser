@@ -22,7 +22,7 @@ export function Hero() {
         </h1>
 
         <p className="text-lg sm:text-xl text-[#5C5C5A] max-w-2xl mb-10 leading-relaxed">
-          Socializer cross-posts your content to X, LinkedIn, Instagram, Threads, Bluesky, and TikTok — simultaneously. One compose box to rule them all.
+          Socializer cross-posts your content to YouTube, Instagram, Threads, Facebook, Bluesky, and TikTok — simultaneously. One compose box to rule them all.
         </p>
 
         <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">

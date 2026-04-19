@@ -770,3 +770,154 @@ export async function postToBlueskyServer(
     return { success: false, error: err instanceof Error ? err.message : String(err) };
   }
 }
+
+// ── TikTok ──────────────────────────────────────────────────────────
+// Content Posting API v2. Videos are uploaded via FILE_UPLOAD (pre-signed PUT
+// URL returned by /post/publish/video/init/), then status is polled.
+
+const TIKTOK_TOKEN = "https://open.tiktokapis.com/v2/oauth/token/";
+const TIKTOK_VIDEO_INIT = "https://open.tiktokapis.com/v2/post/publish/video/init/";
+const TIKTOK_STATUS = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
+
+export type TikTokPrivacy =
+  | "PUBLIC_TO_EVERYONE"
+  | "MUTUAL_FOLLOW_FRIENDS"
+  | "FOLLOWER_OF_CREATOR"
+  | "SELF_ONLY";
+
+export async function refreshTikTokToken(
+  refreshToken: string
+): Promise<{ access_token: string; refresh_token: string; expires_in: number } | null> {
+  try {
+    const clientKey = process.env.TIKTOK_CLIENT_KEY ?? "";
+    const clientSecret = process.env.TIKTOK_CLIENT_SECRET ?? "";
+    if (!clientKey || !clientSecret) return null;
+
+    const res = await fetch(TIKTOK_TOKEN, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        "Cache-Control": "no-cache",
+      },
+      body: new URLSearchParams({
+        client_key: clientKey,
+        client_secret: clientSecret,
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+      signal: AbortSignal.timeout(12000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.access_token) return null;
+    return {
+      access_token: data.access_token as string,
+      refresh_token: (data.refresh_token as string) ?? refreshToken,
+      expires_in: (data.expires_in as number) ?? 86400,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function postToTikTokServer(
+  accessToken: string,
+  videoUrl: string,
+  title: string,
+  privacyLevel: TikTokPrivacy = "SELF_ONLY"
+): Promise<{ success: boolean; publish_id?: string; error?: string }> {
+  try {
+    // 1. Download video from Supabase
+    const fileRes = await fetch(videoUrl, { signal: AbortSignal.timeout(30000) });
+    if (!fileRes.ok) return { success: false, error: `Fetch video failed (${fileRes.status})` };
+    const videoBuffer = await fileRes.arrayBuffer();
+    const videoSize = videoBuffer.byteLength;
+    if (videoSize === 0) return { success: false, error: "Video is empty" };
+    if (videoSize > 4 * 1024 * 1024 * 1024)
+      return { success: false, error: "Video exceeds 4GB TikTok limit" };
+
+    // 2. Init video post — TikTok returns upload_url + publish_id
+    const chunkSize = videoSize; // single chunk
+    const initRes = await fetch(TIKTOK_VIDEO_INIT, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify({
+        post_info: {
+          title: title.slice(0, 2200),
+          privacy_level: privacyLevel,
+          disable_duet: false,
+          disable_comment: false,
+          disable_stitch: false,
+          video_cover_timestamp_ms: 1000,
+        },
+        source_info: {
+          source: "FILE_UPLOAD",
+          video_size: videoSize,
+          chunk_size: chunkSize,
+          total_chunk_count: 1,
+        },
+      }),
+      signal: AbortSignal.timeout(15000),
+    });
+    const initData = await initRes.json().catch(() => ({}));
+    if (!initRes.ok || initData?.error?.code !== "ok") {
+      const detail =
+        initData?.error?.message || initData?.error?.code || `HTTP ${initRes.status}`;
+      return { success: false, error: `Init failed: ${detail}` };
+    }
+    const publishId = initData?.data?.publish_id as string | undefined;
+    const uploadUrl = initData?.data?.upload_url as string | undefined;
+    if (!publishId || !uploadUrl)
+      return { success: false, error: "Init response missing publish_id or upload_url" };
+
+    // 3. PUT video bytes to the pre-signed upload URL
+    const putRes = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "video/mp4",
+        "Content-Length": String(videoSize),
+        "Content-Range": `bytes 0-${videoSize - 1}/${videoSize}`,
+      },
+      body: videoBuffer,
+      signal: AbortSignal.timeout(180000),
+    });
+    if (!putRes.ok && putRes.status !== 201) {
+      const err = await putRes.text().catch(() => "");
+      return { success: false, error: `Upload failed (${putRes.status}): ${err.slice(0, 200)}` };
+    }
+
+    return { success: true, publish_id: publishId };
+  } catch (err) {
+    return { success: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+export async function checkTikTokPublishStatus(
+  accessToken: string,
+  publishId: string
+): Promise<{ status: string; fail_reason?: string; publicaly_available_post_id?: string[] }> {
+  try {
+    const res = await fetch(TIKTOK_STATUS, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify({ publish_id: publishId }),
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.error?.code !== "ok") {
+      return { status: "FAILED", fail_reason: data?.error?.message || `HTTP ${res.status}` };
+    }
+    return {
+      status: (data?.data?.status as string) ?? "UNKNOWN",
+      fail_reason: data?.data?.fail_reason,
+      publicaly_available_post_id: data?.data?.publicaly_available_post_id,
+    };
+  } catch (err) {
+    return { status: "FAILED", fail_reason: err instanceof Error ? err.message : String(err) };
+  }
+}
