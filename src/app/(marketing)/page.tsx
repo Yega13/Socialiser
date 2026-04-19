@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Hero } from "@/components/marketing/hero";
 import { Features } from "@/components/marketing/features";
 import { CTA } from "@/components/marketing/cta";
+import { FAQTeaser } from "@/components/marketing/faq-teaser";
 import { SITE_CONFIG } from "@/lib/constants";
 
 export const metadata: Metadata = {
@@ -34,6 +35,7 @@ export default function HomePage() {
       <Hero />
       <Features />
       <CTA />
+      <FAQTeaser />
     </>
   );
 }

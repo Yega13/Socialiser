@@ -54,14 +54,48 @@ export default async function DashboardPage() {
       </div>
 
       <section>
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-bold text-[#0A0A0A]">Your Platforms</h2>
-          <span className="text-sm text-[#5C5C5A]">{connectedCount} connected</span>
+        <div className="flex items-end justify-between mb-5 border-b-2 border-[#0A0A0A] pb-3">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center justify-center w-9 h-9 bg-[#C8FF00] border border-[#0A0A0A] shadow-[3px_3px_0px_0px_#0A0A0A] text-lg">
+              🔌
+            </span>
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-widest text-[#5C5C5A]">
+                Section 01
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black text-[#0A0A0A] leading-none">
+                Connected Platforms
+              </h2>
+            </div>
+          </div>
+          <span className="text-xs font-bold text-[#0A0A0A] bg-[#F9F9F7] border border-[#0A0A0A] px-2 py-1">
+            {connectedCount} connected
+          </span>
         </div>
         <PlatformsGrid />
       </section>
 
-      <AnalyticsSection userId={user.id} />
+      <section>
+        <div className="flex items-end justify-between mb-5 border-b-2 border-[#0A0A0A] pb-3">
+          <div className="flex items-center gap-3">
+            <span className="inline-flex items-center justify-center w-9 h-9 bg-[#7C3AED] border border-[#0A0A0A] shadow-[3px_3px_0px_0px_#0A0A0A] text-lg text-[#F9F9F7]">
+              📊
+            </span>
+            <div>
+              <div className="text-[10px] font-black uppercase tracking-widest text-[#5C5C5A]">
+                Section 02
+              </div>
+              <h2 className="text-xl sm:text-2xl font-black text-[#0A0A0A] leading-none">
+                Analytics &amp; Insights
+              </h2>
+            </div>
+          </div>
+          <span className="text-xs font-bold text-[#0A0A0A] bg-[#F9F9F7] border border-[#0A0A0A] px-2 py-1 hidden sm:inline-block">
+            Live data
+          </span>
+        </div>
+        <AnalyticsSection userId={user.id} />
+      </section>
     </div>
   );
 }

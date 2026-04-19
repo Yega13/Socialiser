@@ -80,11 +80,10 @@ export function AnalyticsSection({ userId }: { userId: string }) {
   );
 
   return (
-    <section>
-      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
-        <h2 className="text-lg font-bold text-[#0A0A0A]">Analytics</h2>
-        {isPending && <span className="text-xs text-[#5C5C5A]">Loading…</span>}
-      </div>
+    <div>
+      {isPending && (
+        <div className="mb-3 text-xs text-[#5C5C5A] font-bold">Loading…</div>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <span className="inline-flex items-center px-2.5 py-1.5 bg-[#C8FF00] border border-[#0A0A0A] shadow-[3px_3px_0px_0px_#0A0A0A] text-[10px] font-black uppercase tracking-wider text-[#0A0A0A]">
@@ -260,10 +259,11 @@ export function AnalyticsSection({ userId }: { userId: string }) {
           </li>
           <li>
             <span className="font-black uppercase">TikTok:</span>{" "}
-            not connected yet — coming soon.
+            Content Posting API limits unaudited apps to private posts;
+            analytics requires separate Display API scopes (coming soon).
           </li>
         </ul>
       </div>
-    </section>
+    </div>
   );
 }
