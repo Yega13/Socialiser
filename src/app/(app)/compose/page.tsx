@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { PLATFORMS } from "@/lib/constants";
 import { cn } from "@/lib/utils";
-import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, refreshTikTokToken, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook, uploadMastodonMedia, checkMastodonMedia, postToMastodonServer, postToTikTokServer, checkTikTokPublishStatus } from "./actions";
+import { refreshYouTubeToken, refreshInstagramToken, refreshThreadsToken, refreshBlueskySession, refreshTikTokToken, postToInstagramServer, postCarouselToInstagram, postToThreadsServer, postCarouselToThreads, postToBlueskyServer, postToFacebookServer, postCarouselToFacebook, uploadMastodonMedia, checkMastodonMedia, postToMastodonServer, postToTikTokServer, checkTikTokPublishStatus, getTikTokCreatorInfo, type TikTokPrivacy, type TikTokCreatorInfo } from "./actions";
 import { uploadBlueskyVideo } from "@/lib/bluesky-video";
 import type { BskyBlob } from "@/lib/bluesky-video";
 import { resolveBlueskyPDS } from "@/lib/bluesky";
@@ -232,6 +232,16 @@ export default function ComposePage() {
   const [previewTab, setPreviewTab] = useState<string>("instagram");
   const [moderationError, setModerationError] = useState<string | null>(null);
   const [igPostType, setIgPostType] = useState<"post" | "reel" | "story">("post");
+  const [tiktokCreatorInfo, setTiktokCreatorInfo] = useState<TikTokCreatorInfo | null>(null);
+  const [tiktokInfoError, setTiktokInfoError] = useState<string | null>(null);
+  const [tiktokInfoLoading, setTiktokInfoLoading] = useState(false);
+  const [tiktokPrivacy, setTiktokPrivacy] = useState<TikTokPrivacy>("SELF_ONLY");
+  const [tiktokDisableComment, setTiktokDisableComment] = useState(false);
+  const [tiktokDisableDuet, setTiktokDisableDuet] = useState(false);
+  const [tiktokDisableStitch, setTiktokDisableStitch] = useState(false);
+  const [tiktokCoverMs, setTiktokCoverMs] = useState(1000);
+  const [tiktokBrandContent, setTiktokBrandContent] = useState(false);
+  const [tiktokBrandOrganic, setTiktokBrandOrganic] = useState(false);
   const dragStart = useRef<{ x: number; y: number; ox: number; oy: number } | null>(null);
   const previewRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -323,6 +333,46 @@ export default function ComposePage() {
       else if (selected.includes("mastodon")) setPreviewTab("mastodon");
     }
   }, [selected, previewTab]);
+
+  // Fetch TikTok creator_info when TikTok is selected + connected — required by
+  // TikTok before every post. Gates which privacy levels + toggles are allowed.
+  useEffect(() => {
+    if (!selected.includes("tiktok")) {
+      setTiktokCreatorInfo(null);
+      setTiktokInfoError(null);
+      return;
+    }
+    const conn = connected.find((c) => c.platform === "tiktok");
+    if (!conn) return;
+    let cancelled = false;
+    setTiktokInfoLoading(true);
+    setTiktokInfoError(null);
+    (async () => {
+      // Refresh token first if needed — same helper used elsewhere
+      let accessToken = conn.access_token;
+      if (conn.refresh_token) {
+        const refreshed = await refreshTikTokToken(conn.refresh_token);
+        if (refreshed) accessToken = refreshed.access_token;
+      }
+      const result = await getTikTokCreatorInfo(accessToken);
+      if (cancelled) return;
+      setTiktokInfoLoading(false);
+      if (!result.ok) {
+        setTiktokInfoError(result.error);
+        return;
+      }
+      setTiktokCreatorInfo(result.info);
+      // Default privacy to first allowed option (SELF_ONLY for unaudited apps)
+      const first = result.info.privacy_level_options[0];
+      if (first) setTiktokPrivacy(first);
+      if (result.info.comment_disabled) setTiktokDisableComment(true);
+      if (result.info.duet_disabled) setTiktokDisableDuet(true);
+      if (result.info.stitch_disabled) setTiktokDisableStitch(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, connected]);
 
   async function handleFilesChange(files: FileList | null) {
     if (!files || files.length === 0) return;
@@ -675,9 +725,18 @@ export default function ComposePage() {
         const videoUrl = sharedMediaUrls.find((m) => m.isVideo)?.url;
         if (!videoUrl) return [platformId, { success: false, error: "Video URL missing" }];
 
-        const caption = `${title}${description ? "\n\n" + description : ""}`;
         setPostingStatus("Uploading video to TikTok...");
-        const initResult = await postToTikTokServer(accessToken, videoUrl, caption, "SELF_ONLY");
+        const initResult = await postToTikTokServer(accessToken, videoUrl, {
+          title,
+          description,
+          privacyLevel: tiktokPrivacy,
+          disableComment: tiktokDisableComment,
+          disableDuet: tiktokDisableDuet,
+          disableStitch: tiktokDisableStitch,
+          videoCoverTimestampMs: tiktokCoverMs,
+          brandContentToggle: tiktokBrandContent,
+          brandOrganicToggle: tiktokBrandOrganic,
+        });
         if (!initResult.success || !initResult.publish_id) {
           return [platformId, { success: false, error: initResult.error || "TikTok upload failed" }];
         }
@@ -1138,6 +1197,166 @@ export default function ComposePage() {
               <p className="text-xs text-[var(--color-gray-500)] mt-2">
                 Story disappears after 24 hours. No stickers, music, or polls via API.
               </p>
+            )}
+          </div>
+        )}
+
+        {/* TikTok settings panel */}
+        {tiktokSelected && (
+          <div className="border border-[#0A0A0A] bg-[#F9F9F7] shadow-[4px_4px_0px_0px_#0A0A0A] p-4 space-y-4">
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-gradient-to-r from-[#25F4EE] to-[#FE2C55] border border-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A] text-[10px] font-black uppercase tracking-wider text-white">
+                TikTok
+              </span>
+              <span className="text-sm font-bold text-[#0A0A0A]">Post settings</span>
+              {tiktokInfoLoading && (
+                <span className="text-xs text-[#5C5C5A] font-bold">Loading creator info…</span>
+              )}
+            </div>
+
+            {tiktokInfoError && (
+              <div className="p-3 border border-[#FF4F4F] bg-[#FFF1F1] text-xs text-[#FF4F4F] font-bold">
+                Couldn&apos;t fetch creator info: {tiktokInfoError}. Reconnect TikTok in Settings if this persists.
+              </div>
+            )}
+
+            {tiktokCreatorInfo && (
+              <>
+                {/* Privacy */}
+                <div>
+                  <label className="font-bold text-xs text-[#0A0A0A] block mb-2 uppercase tracking-wide">
+                    Who can view this video
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {(["PUBLIC_TO_EVERYONE", "MUTUAL_FOLLOW_FRIENDS", "FOLLOWER_OF_CREATOR", "SELF_ONLY"] as TikTokPrivacy[]).map((opt) => {
+                      const enabled = tiktokCreatorInfo.privacy_level_options.includes(opt);
+                      const label =
+                        opt === "PUBLIC_TO_EVERYONE" ? "Public"
+                        : opt === "MUTUAL_FOLLOW_FRIENDS" ? "Friends"
+                        : opt === "FOLLOWER_OF_CREATOR" ? "Followers"
+                        : "Only me";
+                      return (
+                        <button
+                          key={opt}
+                          onClick={() => enabled && setTiktokPrivacy(opt)}
+                          disabled={!enabled}
+                          className={cn(
+                            "px-3 py-1.5 text-xs font-bold border border-[#0A0A0A] transition-all",
+                            tiktokPrivacy === opt
+                              ? "bg-[#0A0A0A] text-[#F9F9F7] shadow-[3px_3px_0px_0px_#FE2C55]"
+                              : enabled
+                              ? "bg-[#F9F9F7] text-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A] hover:translate-x-[1px] hover:translate-y-[1px]"
+                              : "bg-[#F9F9F7] text-[#5C5C5A] opacity-40 cursor-not-allowed"
+                          )}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {tiktokCreatorInfo.privacy_level_options.length === 1 &&
+                    tiktokCreatorInfo.privacy_level_options[0] === "SELF_ONLY" && (
+                      <p className="text-[11px] text-[#FE2C55] font-bold mt-2">
+                        Only &ldquo;Only me&rdquo; is available — your TikTok app is still unaudited. Post publicly unlocks after TikTok approves the app.
+                      </p>
+                    )}
+                </div>
+
+                {/* Interaction toggles */}
+                <div>
+                  <label className="font-bold text-xs text-[#0A0A0A] block mb-2 uppercase tracking-wide">
+                    Allow viewers to
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {[
+                      { key: "comment" as const, label: "Comment", disabled: tiktokDisableComment, setDisabled: setTiktokDisableComment, platformBlocked: tiktokCreatorInfo.comment_disabled },
+                      { key: "duet" as const, label: "Duet", disabled: tiktokDisableDuet, setDisabled: setTiktokDisableDuet, platformBlocked: tiktokCreatorInfo.duet_disabled },
+                      { key: "stitch" as const, label: "Stitch", disabled: tiktokDisableStitch, setDisabled: setTiktokDisableStitch, platformBlocked: tiktokCreatorInfo.stitch_disabled },
+                    ].map((t) => {
+                      const allowed = !t.disabled;
+                      return (
+                        <button
+                          key={t.key}
+                          onClick={() => !t.platformBlocked && t.setDisabled(!t.disabled)}
+                          disabled={t.platformBlocked}
+                          className={cn(
+                            "flex items-center gap-2 px-3 py-1.5 text-xs font-bold border border-[#0A0A0A] transition-all",
+                            allowed && !t.platformBlocked
+                              ? "bg-[#C8FF00] text-[#0A0A0A] shadow-[3px_3px_0px_0px_#0A0A0A]"
+                              : t.platformBlocked
+                              ? "bg-[#F9F9F7] text-[#5C5C5A] opacity-40 cursor-not-allowed"
+                              : "bg-[#F9F9F7] text-[#5C5C5A] shadow-[2px_2px_0px_0px_#0A0A0A]"
+                          )}
+                        >
+                          <span>{allowed && !t.platformBlocked ? "✓" : "✕"}</span>
+                          {t.label}
+                          {t.platformBlocked && <span className="text-[9px] text-[#FE2C55]">(off in TikTok settings)</span>}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Cover frame */}
+                {hasSingleVideo && (
+                  <div>
+                    <label className="font-bold text-xs text-[#0A0A0A] block mb-2 uppercase tracking-wide">
+                      Cover frame
+                      <span className="font-normal text-[#5C5C5A] ml-2 normal-case">
+                        {(tiktokCoverMs / 1000).toFixed(1)}s
+                      </span>
+                    </label>
+                    <input
+                      type="range"
+                      min={0}
+                      max={Math.max(1000, Math.floor(videoDuration * 1000))}
+                      step={100}
+                      value={tiktokCoverMs}
+                      onChange={(e) => setTiktokCoverMs(Number(e.target.value))}
+                      className="w-full accent-[#FE2C55]"
+                    />
+                  </div>
+                )}
+
+                {/* Branded Content */}
+                <div>
+                  <label className="font-bold text-xs text-[#0A0A0A] block mb-2 uppercase tracking-wide">
+                    Disclose paid partnership
+                    <span className="font-normal text-[#5C5C5A] ml-2 normal-case">
+                      (required if sponsored)
+                    </span>
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      onClick={() => setTiktokBrandOrganic(!tiktokBrandOrganic)}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-bold border border-[#0A0A0A] transition-all",
+                        tiktokBrandOrganic
+                          ? "bg-[#0A0A0A] text-[#F9F9F7] shadow-[3px_3px_0px_0px_#C8FF00]"
+                          : "bg-[#F9F9F7] text-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A]"
+                      )}
+                    >
+                      Your brand
+                    </button>
+                    <button
+                      onClick={() => setTiktokBrandContent(!tiktokBrandContent)}
+                      className={cn(
+                        "px-3 py-1.5 text-xs font-bold border border-[#0A0A0A] transition-all",
+                        tiktokBrandContent
+                          ? "bg-[#0A0A0A] text-[#F9F9F7] shadow-[3px_3px_0px_0px_#C8FF00]"
+                          : "bg-[#F9F9F7] text-[#0A0A0A] shadow-[2px_2px_0px_0px_#0A0A0A]"
+                      )}
+                    >
+                      Branded content
+                    </button>
+                  </div>
+                  {tiktokBrandContent && tiktokPrivacy === "SELF_ONLY" && (
+                    <p className="text-[11px] text-[#FE2C55] font-bold mt-2">
+                      Branded content requires a non-private privacy level — switch to Public/Friends/Followers.
+                    </p>
+                  )}
+                </div>
+              </>
             )}
           </div>
         )}
@@ -1953,7 +2172,13 @@ export default function ComposePage() {
                     {(`${title}${description ? "\n\n" + description : ""}`).length}/2200 characters
                   </p>
                   <p className="text-[10px] text-[#FE2C55] font-bold mt-1">
-                    Post will be private (Only Me) until your TikTok app is audited.
+                    Privacy: {tiktokPrivacy === "PUBLIC_TO_EVERYONE" ? "Public"
+                      : tiktokPrivacy === "MUTUAL_FOLLOW_FRIENDS" ? "Friends"
+                      : tiktokPrivacy === "FOLLOWER_OF_CREATOR" ? "Followers"
+                      : "Only me"}
+                    {tiktokCreatorInfo?.privacy_level_options.length === 1 &&
+                      tiktokCreatorInfo.privacy_level_options[0] === "SELF_ONLY" &&
+                      " · unaudited app"}
                   </p>
                 </div>
               </div>

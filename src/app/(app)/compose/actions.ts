@@ -778,12 +778,62 @@ export async function postToBlueskyServer(
 const TIKTOK_TOKEN = "https://open.tiktokapis.com/v2/oauth/token/";
 const TIKTOK_VIDEO_INIT = "https://open.tiktokapis.com/v2/post/publish/video/init/";
 const TIKTOK_STATUS = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
+const TIKTOK_CREATOR_INFO = "https://open.tiktokapis.com/v2/post/publish/creator_info/query/";
 
 export type TikTokPrivacy =
   | "PUBLIC_TO_EVERYONE"
   | "MUTUAL_FOLLOW_FRIENDS"
   | "FOLLOWER_OF_CREATOR"
   | "SELF_ONLY";
+
+export type TikTokCreatorInfo = {
+  creator_avatar_url?: string;
+  creator_username?: string;
+  creator_nickname?: string;
+  privacy_level_options: TikTokPrivacy[];
+  comment_disabled: boolean;
+  duet_disabled: boolean;
+  stitch_disabled: boolean;
+  max_video_post_duration_sec: number;
+};
+
+export async function getTikTokCreatorInfo(
+  accessToken: string
+): Promise<{ ok: true; info: TikTokCreatorInfo } | { ok: false; error: string }> {
+  try {
+    const res = await fetch(TIKTOK_CREATOR_INFO, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+      signal: AbortSignal.timeout(10000),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data?.error?.code !== "ok") {
+      const msg = data?.error?.message || data?.error?.code || `HTTP ${res.status}`;
+      return { ok: false, error: msg };
+    }
+    const d = data?.data ?? {};
+    return {
+      ok: true,
+      info: {
+        creator_avatar_url: d.creator_avatar_url,
+        creator_username: d.creator_username,
+        creator_nickname: d.creator_nickname,
+        privacy_level_options: Array.isArray(d.privacy_level_options)
+          ? d.privacy_level_options
+          : ["SELF_ONLY"],
+        comment_disabled: Boolean(d.comment_disabled),
+        duet_disabled: Boolean(d.duet_disabled),
+        stitch_disabled: Boolean(d.stitch_disabled),
+        max_video_post_duration_sec: Number(d.max_video_post_duration_sec) || 60,
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
 
 export async function refreshTikTokToken(
   refreshToken: string
@@ -819,13 +869,33 @@ export async function refreshTikTokToken(
   }
 }
 
+export type TikTokPostOptions = {
+  title?: string;
+  description?: string;
+  privacyLevel?: TikTokPrivacy;
+  disableComment?: boolean;
+  disableDuet?: boolean;
+  disableStitch?: boolean;
+  videoCoverTimestampMs?: number;
+  brandContentToggle?: boolean;
+  brandOrganicToggle?: boolean;
+};
+
 export async function postToTikTokServer(
   accessToken: string,
   videoUrl: string,
-  title: string,
+  titleOrOptions: string | TikTokPostOptions,
   privacyLevel: TikTokPrivacy = "SELF_ONLY"
 ): Promise<{ success: boolean; publish_id?: string; error?: string }> {
   try {
+    const opts: TikTokPostOptions =
+      typeof titleOrOptions === "string"
+        ? { title: titleOrOptions, privacyLevel }
+        : titleOrOptions;
+    const title = (opts.title ?? "").slice(0, 90);
+    const description = (opts.description ?? "").slice(0, 2200);
+    const privacy: TikTokPrivacy = opts.privacyLevel ?? "SELF_ONLY";
+
     // 1. Download video from Supabase
     const fileRes = await fetch(videoUrl, { signal: AbortSignal.timeout(30000) });
     if (!fileRes.ok) return { success: false, error: `Fetch video failed (${fileRes.status})` };
@@ -837,6 +907,18 @@ export async function postToTikTokServer(
 
     // 2. Init video post — TikTok returns upload_url + publish_id
     const chunkSize = videoSize; // single chunk
+    const postInfo: Record<string, unknown> = {
+      title,
+      privacy_level: privacy,
+      disable_duet: Boolean(opts.disableDuet),
+      disable_comment: Boolean(opts.disableComment),
+      disable_stitch: Boolean(opts.disableStitch),
+      video_cover_timestamp_ms: Math.max(0, Math.floor(opts.videoCoverTimestampMs ?? 1000)),
+    };
+    if (description) postInfo.description = description;
+    if (opts.brandContentToggle) postInfo.brand_content_toggle = true;
+    if (opts.brandOrganicToggle) postInfo.brand_organic_toggle = true;
+
     const initRes = await fetch(TIKTOK_VIDEO_INIT, {
       method: "POST",
       headers: {
@@ -844,14 +926,7 @@ export async function postToTikTokServer(
         "Content-Type": "application/json; charset=UTF-8",
       },
       body: JSON.stringify({
-        post_info: {
-          title: title.slice(0, 2200),
-          privacy_level: privacyLevel,
-          disable_duet: false,
-          disable_comment: false,
-          disable_stitch: false,
-          video_cover_timestamp_ms: 1000,
-        },
+        post_info: postInfo,
         source_info: {
           source: "FILE_UPLOAD",
           video_size: videoSize,
