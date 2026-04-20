@@ -15,10 +15,16 @@
 
 # next.js
 /.next/
+/.next_old*/
+/.next-old*/
+/.next_corrupted*/
+/.next2*/
 /out/
 
 # opennextjs cloudflare build output
 /.open-next/
+/.open-next_old*/
+/.open-next-old*/
 
 # production
 /build
