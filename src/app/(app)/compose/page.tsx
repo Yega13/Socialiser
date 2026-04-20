@@ -362,9 +362,11 @@ export default function ComposePage() {
         return;
       }
       setTiktokCreatorInfo(result.info);
-      // Default privacy to first allowed option (SELF_ONLY for unaudited apps)
-      const first = result.info.privacy_level_options[0];
-      if (first) setTiktokPrivacy(first);
+      // Prefer SELF_ONLY if present (required for unaudited sandbox apps),
+      // else fall back to first allowed option.
+      const opts = result.info.privacy_level_options;
+      if (opts.includes("SELF_ONLY")) setTiktokPrivacy("SELF_ONLY");
+      else if (opts[0]) setTiktokPrivacy(opts[0]);
       if (result.info.comment_disabled) setTiktokDisableComment(true);
       if (result.info.duet_disabled) setTiktokDisableDuet(true);
       if (result.info.stitch_disabled) setTiktokDisableStitch(true);
