@@ -201,11 +201,7 @@ export function PlatformCard({
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { window.location.href = "/login"; return; }
 
-      const clientKey = process.env.NEXT_PUBLIC_TIKTOK_CLIENT_KEY ?? "";
-      if (!clientKey) {
-        window.location.href = "/dashboard?error=tiktok_not_configured";
-        return;
-      }
+      const clientKey = "sbawanyw2hz789bluw";
 
       // csrf_state param is required by TikTok but also encodes our user id
       const params = new URLSearchParams({
