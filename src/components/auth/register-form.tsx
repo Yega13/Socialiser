@@ -38,10 +38,18 @@ export function RegisterForm() {
 
   async function handleGoogleSignIn() {
     const supabase = createClient();
-    await supabase.auth.signInWithOAuth({
+    const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
-      options: { redirectTo: `${window.location.origin}/auth/callback` },
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`,
+        skipBrowserRedirect: true,
+      },
     });
+    if (error) {
+      setServerError(error.message);
+      return;
+    }
+    if (data?.url) window.location.href = data.url;
   }
 
   if (success) {
