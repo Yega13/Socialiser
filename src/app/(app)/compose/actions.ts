@@ -938,9 +938,13 @@ export async function postToTikTokServer(
     });
     const initData = await initRes.json().catch(() => ({}));
     if (!initRes.ok || initData?.error?.code !== "ok") {
-      const detail =
-        initData?.error?.message || initData?.error?.code || `HTTP ${initRes.status}`;
-      return { success: false, error: `Init failed: ${detail}` };
+      const code = initData?.error?.code ?? `HTTP${initRes.status}`;
+      const msg = initData?.error?.message ?? "";
+      const logId = initData?.error?.log_id ?? "";
+      return {
+        success: false,
+        error: `Init failed [${code}]${logId ? ` (log:${logId})` : ""}: ${msg}`,
+      };
     }
     const publishId = initData?.data?.publish_id as string | undefined;
     const uploadUrl = initData?.data?.upload_url as string | undefined;
